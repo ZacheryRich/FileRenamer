@@ -11,18 +11,35 @@ with optional subfolders by account (full label), by year, or both.
 ## Status
 
 - [x] `core/`: date modes, filename builder, folder planner, rename plan, rename/undo engine
-- [x] `tests/`: Catch2 suite (31 tests)
-- [ ] SQLite storage (cases, people, accounts, rename log)
-- [ ] Qt 6 GUI (case/account management, rename session, PDF preview)
+- [x] `core/Database`: SQLite storage (cases, people, accounts, rename history)
+- [x] `tests/`: Catch2 suite (43 tests)
+- [x] `app/`: Qt 6 main window (cases, people, accounts) and dialogs
+- [ ] Rename screen (file table, date modes, sorting, apply/undo)
+- [ ] PDF preview pane
 
 ## Building (Windows, Visual Studio 2022)
 
-    cmake -S . -B build -G "Visual Studio 17 2022"
-    cmake --build build --config Debug
-    ctest --test-dir build -C Debug --output-on-failure
+`CMakePresets.json` points CMake at Qt in `C:/Qt/6.12.0/msvc2022_64`; change
+that path there if Qt moves or is upgraded.
 
-Catch2 is used from vcpkg if found (`vcpkg install catch2`), otherwise CMake
-downloads it automatically.
+    cmake --preset vs2022
+    cmake --build --preset debug
+    ctest --preset debug
+
+Or open the folder in Visual Studio and pick the "Visual Studio 2022 x64 (Qt 6.12)"
+preset. Each build runs `windeployqt`, so `build/app/Debug/FinRenamer.exe` runs as-is.
+The database lives in `%APPDATA%\FinRenamer\finrenamer.db` (File > Show Data Folder).
+
+To build only the core library and tests without Qt: `-DFINRENAMER_BUILD_APP=OFF`.
+
+Catch2 and SQLiteCpp are used from vcpkg if found (`vcpkg install catch2 sqlitecpp`),
+otherwise CMake downloads them automatically.
+
+## Database
+
+One SQLite file (the GUI will keep it in `%APPDATA%`). Schema changes go in
+`kMigrations` in `Database.cpp` as a new entry; never edit a shipped one.
+`PRAGMA user_version` records which entries have run.
 
 ## How the pieces fit
 

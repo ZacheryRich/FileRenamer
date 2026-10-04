@@ -5,12 +5,14 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(FINRENAMER_BUILD_APP "Build the Qt GUI (needs Qt 6)" ON)
 option(FINRENAMER_BUILD_TESTS "Build the unit tests" ON)
 
 add_subdirectory(core)
 
-# The Qt GUI goes here in a later step:
-# add_subdirectory(app)
+if(FINRENAMER_BUILD_APP)
+    add_subdirectory(app)
+endif()
 
 if(FINRENAMER_BUILD_TESTS)
     enable_testing()

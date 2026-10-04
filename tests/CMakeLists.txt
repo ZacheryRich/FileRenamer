@@ -16,6 +16,7 @@ add_executable(finrenamer_tests
     FolderPlannerTests.cpp
     RenamePlanTests.cpp
     RenameEngineTests.cpp
+    DatabaseTests.cpp
 )
 target_link_libraries(finrenamer_tests PRIVATE finrenamer_core Catch2::Catch2WithMain)
 
