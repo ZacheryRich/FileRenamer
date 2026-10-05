@@ -28,9 +28,25 @@ struct AccountRecord {
     std::int64_t id = 0;
     std::int64_t caseId = 0;
     std::string institution;
+    std::string institutionDisplay;  // blank = same as institution
     std::string accountType;
     std::string lastFour;
     std::vector<std::int64_t> ownerIds;
+};
+
+// A person to add when creating a case.
+struct NewPerson {
+    std::string fullName;
+    std::string displayName;
+};
+
+// Husband (H), Wife (W), Joint (J) -- added to every new case by the app.
+std::vector<NewPerson> defaultCasePeople();
+
+// An institution used before, with the display name it was last given.
+struct InstitutionName {
+    std::string institution;
+    std::string displayName;
 };
 
 // One row of the rename history list.
@@ -62,17 +78,23 @@ public:
     int schemaVersion() const;
 
     // ---- Cases ----------------------------------------------------------
-    std::int64_t createCase(const ClientCase& c);  // returns the new id; c.id is ignored
+    // Returns the new id (c.id is ignored). `initialPeople` are added in the
+    // same transaction, in order.
+    std::int64_t createCase(const ClientCase& c, const std::vector<NewPerson>& initialPeople = {});
     void updateCase(const ClientCase& c);
     void deleteCase(std::int64_t caseId);          // also deletes its people and accounts
     std::optional<ClientCase> getCase(std::int64_t caseId) const;
     std::vector<ClientCase> listCases() const;     // sorted by client name
 
     // ---- People ---------------------------------------------------------
-    std::int64_t addPerson(std::int64_t caseId, const std::string& fullName);
-    void renamePerson(std::int64_t personId, const std::string& fullName);
+    // A blank display name means "use the full name in filenames".
+    // Full names and display names must each be unique within a case.
+    std::int64_t addPerson(std::int64_t caseId, const std::string& fullName,
+                           const std::string& displayName = {});
+    void updatePerson(std::int64_t personId, const std::string& fullName,
+                      const std::string& displayName);
     void deletePerson(std::int64_t personId);      // refused while they own an account
-    std::vector<Person> listPeople(std::int64_t caseId) const;  // sorted by name
+    std::vector<Person> listPeople(std::int64_t caseId) const;  // in the order they were added
 
     // ---- Accounts -------------------------------------------------------
     std::int64_t createAccount(const AccountRecord& a);  // a.id is ignored
@@ -81,13 +103,17 @@ public:
     std::optional<AccountRecord> getAccount(std::int64_t accountId) const;
     std::vector<AccountRecord> listAccountRecords(std::int64_t caseId) const;
 
-    // Accounts with owner names filled in, ready for FilenameBuilder/RenamePlan.
+    // Accounts with owners' display names filled in, ready for FilenameBuilder/RenamePlan.
     // Sorted by institution, type, last four.
     std::vector<Account> loadAccounts(std::int64_t caseId) const;
 
     // Every account type used so far, across all cases, for the type field's
     // autocomplete. Case-insensitive duplicates are merged.
     std::vector<std::string> accountTypeSuggestions() const;
+
+    // Every institution used so far (across all cases), each with the display
+    // name from its most recently added account. For autocomplete/autofill.
+    std::vector<InstitutionName> institutionSuggestions() const;
 
     // ---- Rename history -------------------------------------------------
     void saveBatch(const BatchRecord& batch, std::optional<std::int64_t> caseId);

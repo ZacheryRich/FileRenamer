@@ -42,7 +42,7 @@ std::string accountLabel(const Account& account)
         label += clean;
     };
 
-    append(account.institution);
+    append(account.institutionDisplay.empty() ? account.institution : account.institutionDisplay);
     append(account.accountType);
     append(account.lastFour);
 

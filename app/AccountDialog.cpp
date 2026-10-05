@@ -6,7 +6,6 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
-#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -15,6 +14,7 @@
 
 #include <set>
 
+#include "PersonDialog.h"
 #include "QtHelpers.h"
 #include "finrenamer/FilenameBuilder.h"
 
@@ -22,7 +22,15 @@ using namespace finrenamer;
 using namespace ui;
 
 namespace {
-constexpr int kIdRole = Qt::UserRole;
+constexpr int kIdRole = Qt::UserRole;            // person id
+constexpr int kDisplayRole = Qt::UserRole + 1;   // person's display name (for filenames)
+
+void addOwnerItem(QListWidget* list, const Person& p)
+{
+    auto* item = new QListWidgetItem(personLabel(p), list);
+    item->setData(kIdRole, QVariant::fromValue<qlonglong>(p.id));
+    item->setData(kDisplayRole, qstr(p.displayName));
+}
 }
 
 AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
@@ -34,6 +42,26 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
     // ---- Account fields ----
     institution_ = new QLineEdit;
     institution_->setPlaceholderText(tr("e.g. Chase"));
+
+    institutionDisplay_ = new QLineEdit;
+    institutionDisplay_->setPlaceholderText(tr("Same as institution"));
+    institutionDisplay_->setToolTip(tr("What appears in filenames, e.g. \"BofA\" for Bank of America."));
+
+    // Institutions used before (any case) autocomplete, and bring their
+    // abbreviation with them.
+    QStringList institutions;
+    runGuarded(this, [&] {
+        for (const auto& known : db_.institutionSuggestions()) {
+            const QString name = qstr(known.institution);
+            institutions << name;
+            if (known.displayName != known.institution)
+                knownDisplayNames_.insert(name.toLower(), qstr(known.displayName));
+        }
+    });
+    auto* institutionCompleter = new QCompleter(institutions, this);
+    institutionCompleter->setCaseSensitivity(Qt::CaseInsensitive);
+    institutionCompleter->setFilterMode(Qt::MatchContains);
+    institution_->setCompleter(institutionCompleter);
 
     type_ = new QLineEdit;
     type_->setPlaceholderText(tr("e.g. Checking, Roth IRA, Credit Card"));
@@ -52,6 +80,7 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
 
     auto* form = new QFormLayout;
     form->addRow(tr("Institution:"), institution_);
+    form->addRow(tr("Display name:"), institutionDisplay_);
     form->addRow(tr("Account type:"), type_);
     form->addRow(tr("Last four:"), lastFour_);
 
@@ -115,16 +144,18 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
     // ---- Fill in an existing account ----
     if (existing_) {
         institution_->setText(qstr(existing_->institution));
+        // Blank when it's just the institution, so editing the institution carries through.
+        if (existing_->institutionDisplay != existing_->institution) {
+            institutionDisplay_->setText(qstr(existing_->institutionDisplay));
+            displayEditedByUser_ = true;
+        }
         type_->setText(qstr(existing_->accountType));
         lastFour_->setText(qstr(existing_->lastFour));
         runGuarded(this, [&] {
             const auto people = db_.listPeople(caseId_);
             for (const auto id : existing_->ownerIds) {
-                for (const auto& p : people) {
-                    if (p.id != id) continue;
-                    auto* item = new QListWidgetItem(qstr(p.fullName), owners_);
-                    item->setData(kIdRole, QVariant::fromValue<qlonglong>(p.id));
-                }
+                for (const auto& p : people)
+                    if (p.id == id) addOwnerItem(owners_, p);
             }
         });
     }
@@ -133,8 +164,13 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
     // ---- Wiring ----
     connect(buttons_, &QDialogButtonBox::accepted, this, &AccountDialog::accept);
     connect(buttons_, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    for (auto* edit : {institution_, type_, lastFour_})
+    for (auto* edit : {institution_, institutionDisplay_, type_, lastFour_})
         connect(edit, &QLineEdit::textChanged, this, &AccountDialog::updateState);
+    connect(institution_, &QLineEdit::textChanged, this, &AccountDialog::autofillInstitutionDisplay);
+    // textEdited fires only for the user's own typing, not for autofill.
+    connect(institutionDisplay_, &QLineEdit::textEdited, this, [this](const QString& text) {
+        displayEditedByUser_ = !text.trimmed().isEmpty();
+    });
     connect(owners_, &QListWidget::currentRowChanged, this, &AccountDialog::updateState);
     connect(owners_->model(), &QAbstractItemModel::rowsMoved, this, &AccountDialog::updateState);
     connect(addOwnerBtn_, &QPushButton::clicked, this, &AccountDialog::addSelectedPerson);
@@ -157,7 +193,8 @@ void AccountDialog::reloadPeopleChoices()
     runGuarded(this, [&] {
         for (const auto& p : db_.listPeople(caseId_)) {
             if (taken.count(p.id)) continue;
-            peopleChoice_->addItem(qstr(p.fullName), QVariant::fromValue<qlonglong>(p.id));
+            peopleChoice_->addItem(personLabel(p), QVariant::fromValue<qlonglong>(p.id));
+            peopleChoice_->setItemData(peopleChoice_->count() - 1, qstr(p.displayName), kDisplayRole);
         }
     });
     if (peopleChoice_->count() == 0)
@@ -170,24 +207,26 @@ void AccountDialog::addSelectedPerson()
     if (index < 0) return;
     auto* item = new QListWidgetItem(peopleChoice_->itemText(index), owners_);
     item->setData(kIdRole, peopleChoice_->itemData(index));
+    item->setData(kDisplayRole, peopleChoice_->itemData(index, kDisplayRole));
     reloadPeopleChoices();
     updateState();
 }
 
 void AccountDialog::addNewPerson()
 {
-    bool ok = false;
-    const QString name = QInputDialog::getText(this, tr("New Person"),
-                                               tr("Full name as it should appear in filenames:"),
-                                               QLineEdit::Normal, {}, &ok).trimmed();
-    if (!ok || name.isEmpty()) return;
+    PersonDialog dialog(tr("New Person"), {}, {}, this);
+    if (dialog.exec() != QDialog::Accepted) return;
 
-    std::int64_t id = 0;
-    if (!runGuarded(this, [&] { id = db_.addPerson(caseId_, stdstr(name)); })) return;
+    Person p;
+    if (!runGuarded(this, [&] {
+            p.id = db_.addPerson(caseId_, stdstr(dialog.fullName()), stdstr(dialog.displayName()));
+            for (const auto& existing : db_.listPeople(caseId_))
+                if (existing.id == p.id) p = existing;  // pick up the cleaned-up names
+        }))
+        return;
     addedPeople_ = true;
 
-    auto* item = new QListWidgetItem(name, owners_);
-    item->setData(kIdRole, QVariant::fromValue<qlonglong>(id));
+    addOwnerItem(owners_, p);
     reloadPeopleChoices();
     updateState();
 }
@@ -210,13 +249,23 @@ void AccountDialog::moveOwner(int delta)
     updateState();
 }
 
+void AccountDialog::autofillInstitutionDisplay()
+{
+    if (displayEditedByUser_) return;
+    // Known institution -> its usual abbreviation; anything else -> blank (= full name).
+    institutionDisplay_->setText(
+        knownDisplayNames_.value(institution_->text().trimmed().toLower()));
+}
+
 Account AccountDialog::currentAccount() const
 {
     Account a;
     a.institution = stdstr(institution_->text());
+    a.institutionDisplay = stdstr(institutionDisplay_->text().trimmed());
     a.accountType = stdstr(type_->text());
     a.lastFour = stdstr(lastFour_->text());
-    for (int i = 0; i < owners_->count(); ++i) a.owners.push_back(stdstr(owners_->item(i)->text()));
+    for (int i = 0; i < owners_->count(); ++i)
+        a.owners.push_back(stdstr(owners_->item(i)->data(kDisplayRole).toString()));
     return a;
 }
 
@@ -248,6 +297,7 @@ void AccountDialog::accept()
     r.id = existing_ ? existing_->id : 0;
     r.caseId = caseId_;
     r.institution = stdstr(institution_->text());
+    r.institutionDisplay = stdstr(institutionDisplay_->text());
     r.accountType = stdstr(type_->text());
     r.lastFour = stdstr(lastFour_->text());
     for (int i = 0; i < owners_->count(); ++i)

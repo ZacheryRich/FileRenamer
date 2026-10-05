@@ -5,7 +5,6 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
-#include <QInputDialog>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
@@ -20,8 +19,11 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include <map>
+
 #include "AccountDialog.h"
 #include "CaseDialog.h"
+#include "PersonDialog.h"
 #include "QtHelpers.h"
 
 using namespace finrenamer;
@@ -35,6 +37,35 @@ std::optional<std::int64_t> idOf(const QListWidgetItem* item)
 {
     if (!item) return std::nullopt;
     return item->data(kIdRole).toLongLong();
+}
+
+std::optional<std::int64_t> selectedRowId(const QTableWidget* table)
+{
+    const auto rows = table->selectionModel()->selectedRows();
+    if (rows.isEmpty()) return std::nullopt;
+    const QTableWidgetItem* item = table->item(rows.first().row(), 0);
+    if (!item) return std::nullopt;
+    return item->data(kIdRole).toLongLong();
+}
+
+QTableWidget* makeTable(const QStringList& headers)
+{
+    auto* table = new QTableWidget(0, static_cast<int>(headers.size()));
+    table->setHorizontalHeaderLabels(headers);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->verticalHeader()->hide();
+    table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setStretchLastSection(true);
+    return table;
+}
+
+void selectRowWithId(QTableWidget* table, std::optional<std::int64_t> id)
+{
+    if (!id) return;
+    for (int row = 0; row < table->rowCount(); ++row)
+        if (table->item(row, 0)->data(kIdRole).toLongLong() == *id) table->selectRow(row);
 }
 
 QHBoxLayout* buttonRow(std::initializer_list<QPushButton*> buttons)
@@ -109,25 +140,18 @@ void MainWindow::buildUi()
     header->addWidget(renameFilesBtn_, 0, Qt::AlignTop);
 
     // People
-    peopleList_ = new QListWidget;
+    peopleTable_ = makeTable({tr("Name"), tr("In filenames")});
     auto* addPersonBtn = new QPushButton(tr("Add"));
-    renamePersonBtn_ = new QPushButton(tr("Rename"));
+    editPersonBtn_ = new QPushButton(tr("Edit"));
     deletePersonBtn_ = new QPushButton(tr("Delete"));
 
     auto* peopleBox = new QGroupBox(tr("People"));
     auto* peopleLayout = new QVBoxLayout(peopleBox);
-    peopleLayout->addWidget(peopleList_, 1);
-    peopleLayout->addLayout(buttonRow({addPersonBtn, renamePersonBtn_, deletePersonBtn_}));
+    peopleLayout->addWidget(peopleTable_, 1);
+    peopleLayout->addLayout(buttonRow({addPersonBtn, editPersonBtn_, deletePersonBtn_}));
 
     // Accounts
-    accountTable_ = new QTableWidget(0, 4);
-    accountTable_->setHorizontalHeaderLabels({tr("Institution"), tr("Type"), tr("Last 4"), tr("Owners")});
-    accountTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    accountTable_->setSelectionMode(QAbstractItemView::SingleSelection);
-    accountTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    accountTable_->verticalHeader()->hide();
-    accountTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
-    accountTable_->horizontalHeader()->setStretchLastSection(true);
+    accountTable_ = makeTable({tr("Institution"), tr("Type"), tr("Last 4"), tr("Owners")});
 
     auto* addAccountBtn = new QPushButton(tr("Add"));
     editAccountBtn_ = new QPushButton(tr("Edit"));
@@ -139,8 +163,8 @@ void MainWindow::buildUi()
     accountsLayout->addLayout(buttonRow({addAccountBtn, editAccountBtn_, deleteAccountBtn_}));
 
     auto* lists = new QHBoxLayout;
-    lists->addWidget(peopleBox, 1);
-    lists->addWidget(accountsBox, 3);
+    lists->addWidget(peopleBox, 2);
+    lists->addWidget(accountsBox, 5);
 
     auto* detailPage = new QWidget;
     auto* detailLayout = new QVBoxLayout(detailPage);
@@ -172,10 +196,10 @@ void MainWindow::buildUi()
     connect(editCaseBtn_, &QPushButton::clicked, this, &MainWindow::editCase);
     connect(deleteCaseBtn_, &QPushButton::clicked, this, &MainWindow::deleteCase);
 
-    connect(peopleList_, &QListWidget::currentItemChanged, this, &MainWindow::updateButtons);
-    connect(peopleList_, &QListWidget::itemDoubleClicked, this, &MainWindow::renamePerson);
+    connect(peopleTable_, &QTableWidget::itemSelectionChanged, this, &MainWindow::updateButtons);
+    connect(peopleTable_, &QTableWidget::cellDoubleClicked, this, &MainWindow::editPerson);
     connect(addPersonBtn, &QPushButton::clicked, this, &MainWindow::addPerson);
-    connect(renamePersonBtn_, &QPushButton::clicked, this, &MainWindow::renamePerson);
+    connect(editPersonBtn_, &QPushButton::clicked, this, &MainWindow::editPerson);
     connect(deletePersonBtn_, &QPushButton::clicked, this, &MainWindow::deletePerson);
 
     connect(accountTable_, &QTableWidget::itemSelectionChanged, this, &MainWindow::updateButtons);
@@ -262,16 +286,23 @@ void MainWindow::reloadPeople()
 {
     const auto caseId = currentCaseId();
     const auto keep = currentPersonId();
-    peopleList_->clear();
+    peopleTable_->setRowCount(0);
     if (!caseId) return;
 
     runGuarded(this, [&] {
-        for (const auto& p : db_.listPeople(*caseId)) {
-            auto* item = new QListWidgetItem(qstr(p.fullName), peopleList_);
-            item->setData(kIdRole, QVariant::fromValue<qlonglong>(p.id));
-            if (keep && p.id == *keep) peopleList_->setCurrentItem(item);
+        const auto people = db_.listPeople(*caseId);
+        peopleTable_->setRowCount(static_cast<int>(people.size()));
+        for (int row = 0; row < static_cast<int>(people.size()); ++row) {
+            const Person& p = people[static_cast<std::size_t>(row)];
+            const QStringList cells{qstr(p.fullName), qstr(p.displayName)};
+            for (int col = 0; col < cells.size(); ++col) {
+                auto* item = new QTableWidgetItem(cells[col]);
+                item->setData(kIdRole, QVariant::fromValue<qlonglong>(p.id));
+                peopleTable_->setItem(row, col, item);
+            }
         }
     });
+    selectRowWithId(peopleTable_, keep);
 }
 
 void MainWindow::reloadAccounts(std::optional<std::int64_t> select)
@@ -282,23 +313,30 @@ void MainWindow::reloadAccounts(std::optional<std::int64_t> select)
     if (!caseId) return;
 
     runGuarded(this, [&] {
-        const auto accounts = db_.loadAccounts(*caseId);
+        std::map<std::int64_t, Person> people;
+        for (const auto& p : db_.listPeople(*caseId)) people[p.id] = p;
+
+        const auto accounts = db_.listAccountRecords(*caseId);
         accountTable_->setRowCount(static_cast<int>(accounts.size()));
         for (int row = 0; row < static_cast<int>(accounts.size()); ++row) {
-            const Account& a = accounts[static_cast<std::size_t>(row)];
+            const AccountRecord& a = accounts[static_cast<std::size_t>(row)];
             QStringList owners;
-            for (const auto& o : a.owners) owners << qstr(o);
+            for (const auto id : a.ownerIds) owners << personLabel(people[id]);
 
-            const QStringList cells{qstr(a.institution), qstr(a.accountType), qstr(a.lastFour),
+            const QString institution =
+                a.institutionDisplay == a.institution
+                    ? qstr(a.institution)
+                    : QStringLiteral("%1 (%2)").arg(qstr(a.institution), qstr(a.institutionDisplay));
+            const QStringList cells{institution, qstr(a.accountType), qstr(a.lastFour),
                                     owners.join(QStringLiteral("; "))};
             for (int col = 0; col < cells.size(); ++col) {
                 auto* item = new QTableWidgetItem(cells[col]);
                 item->setData(kIdRole, QVariant::fromValue<qlonglong>(a.id));
                 accountTable_->setItem(row, col, item);
             }
-            if (select && a.id == *select) accountTable_->selectRow(row);
         }
     });
+    selectRowWithId(accountTable_, select);
 }
 
 void MainWindow::updateButtons()
@@ -308,7 +346,7 @@ void MainWindow::updateButtons()
     deleteCaseBtn_->setEnabled(hasCase);
 
     const bool hasPerson = currentPersonId().has_value();
-    renamePersonBtn_->setEnabled(hasPerson);
+    editPersonBtn_->setEnabled(hasPerson);
     deletePersonBtn_->setEnabled(hasPerson);
 
     const bool hasAccount = currentAccountId().has_value();
@@ -323,16 +361,12 @@ std::optional<std::int64_t> MainWindow::currentCaseId() const
 
 std::optional<std::int64_t> MainWindow::currentPersonId() const
 {
-    return idOf(peopleList_->currentItem());
+    return selectedRowId(peopleTable_);
 }
 
 std::optional<std::int64_t> MainWindow::currentAccountId() const
 {
-    const auto rows = accountTable_->selectionModel()->selectedRows();
-    if (rows.isEmpty()) return std::nullopt;
-    const QTableWidgetItem* item = accountTable_->item(rows.first().row(), 0);
-    if (!item) return std::nullopt;
-    return item->data(kIdRole).toLongLong();
+    return selectedRowId(accountTable_);
 }
 
 // ---------------------------------------------------------------------------
@@ -344,7 +378,7 @@ void MainWindow::newCase()
     if (dialog.exec() != QDialog::Accepted) return;
 
     std::int64_t id = 0;
-    if (runGuarded(this, [&] { id = db_.createCase(dialog.result()); })) {
+    if (runGuarded(this, [&] { id = db_.createCase(dialog.result(), defaultCasePeople()); })) {
         caseFilter_->clear();
         reloadCases(id);
     }
@@ -396,33 +430,32 @@ void MainWindow::addPerson()
     const auto caseId = currentCaseId();
     if (!caseId) return;
 
-    bool ok = false;
-    const QString name = QInputDialog::getText(this, tr("Add Person"),
-                                               tr("Full name as it should appear in filenames:"),
-                                               QLineEdit::Normal, {}, &ok).trimmed();
-    if (!ok || name.isEmpty()) return;
+    PersonDialog dialog(tr("Add Person"), {}, {}, this);
+    if (dialog.exec() != QDialog::Accepted) return;
 
     std::int64_t id = 0;
-    if (runGuarded(this, [&] { id = db_.addPerson(*caseId, stdstr(name)); })) {
+    if (runGuarded(this, [&] {
+            id = db_.addPerson(*caseId, stdstr(dialog.fullName()), stdstr(dialog.displayName()));
+        })) {
         reloadPeople();
-        for (int i = 0; i < peopleList_->count(); ++i)
-            if (idOf(peopleList_->item(i)) == id) peopleList_->setCurrentRow(i);
+        selectRowWithId(peopleTable_, id);
     }
 }
 
-void MainWindow::renamePerson()
+void MainWindow::editPerson()
 {
     const auto id = currentPersonId();
     if (!id) return;
+    const int row = peopleTable_->currentRow();
 
-    bool ok = false;
-    const QString name = QInputDialog::getText(
-        this, tr("Rename Person"),
-        tr("Full name (this updates every account they own):"),
-        QLineEdit::Normal, peopleList_->currentItem()->text(), &ok).trimmed();
-    if (!ok || name.isEmpty()) return;
+    PersonDialog dialog(tr("Edit Person"), peopleTable_->item(row, 0)->text(),
+                        peopleTable_->item(row, 1)->text(), this);
+    if (dialog.exec() != QDialog::Accepted) return;
 
-    if (runGuarded(this, [&] { db_.renamePerson(*id, stdstr(name)); })) {
+    // Changing the display name updates every account this person owns.
+    if (runGuarded(this, [&] {
+            db_.updatePerson(*id, stdstr(dialog.fullName()), stdstr(dialog.displayName()));
+        })) {
         reloadPeople();
         reloadAccounts();
     }
@@ -435,7 +468,7 @@ void MainWindow::deletePerson()
 
     const auto answer = QMessageBox::question(
         this, tr("Delete Person"),
-        tr("Remove \"%1\" from this case?").arg(peopleList_->currentItem()->text()),
+        tr("Remove \"%1\" from this case?").arg(peopleTable_->item(peopleTable_->currentRow(), 0)->text()),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (answer != QMessageBox::Yes) return;
 

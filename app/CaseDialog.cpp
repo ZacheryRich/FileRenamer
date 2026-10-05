@@ -17,7 +17,6 @@ CaseDialog::CaseDialog(const finrenamer::ClientCase& initial, QWidget* parent)
     setWindowTitle(initial.id == 0 ? tr("New Case") : tr("Edit Case"));
 
     name_ = new QLineEdit(qstr(initial.clientName));
-    name_->setPlaceholderText(tr("e.g. Smith Divorce"));
 
     notes_ = new QPlainTextEdit(qstr(initial.notes));
     notes_->setPlaceholderText(tr("Optional"));

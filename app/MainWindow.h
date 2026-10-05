@@ -41,7 +41,7 @@ private:
     void editCase();
     void deleteCase();
     void addPerson();
-    void renamePerson();
+    void editPerson();
     void deletePerson();
     void addAccount();
     void editAccount();
@@ -62,8 +62,8 @@ private:
     QLabel* caseNotes_ = nullptr;
     QPushButton* renameFilesBtn_ = nullptr;
 
-    QListWidget* peopleList_ = nullptr;
-    QPushButton* renamePersonBtn_ = nullptr;
+    QTableWidget* peopleTable_ = nullptr;
+    QPushButton* editPersonBtn_ = nullptr;
     QPushButton* deletePersonBtn_ = nullptr;
 
     QTableWidget* accountTable_ = nullptr;

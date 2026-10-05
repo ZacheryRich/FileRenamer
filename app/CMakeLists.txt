@@ -7,6 +7,7 @@ qt_add_library(finrenamer_ui STATIC
     QtHelpers.h
     MainWindow.h MainWindow.cpp
     CaseDialog.h CaseDialog.cpp
+    PersonDialog.h PersonDialog.cpp
     AccountDialog.h AccountDialog.cpp
 )
 target_include_directories(finrenamer_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

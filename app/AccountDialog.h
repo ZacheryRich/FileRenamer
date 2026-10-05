@@ -2,6 +2,8 @@
 
 #include <QDialog>
 
+#include <QHash>
+
 #include <cstdint>
 #include <optional>
 
@@ -37,6 +39,7 @@ private:
     void removeOwner();
     void moveOwner(int delta);
     void updateState();
+    void autofillInstitutionDisplay();
     finrenamer::Account currentAccount() const;
 
     finrenamer::Database& db_;
@@ -46,6 +49,9 @@ private:
     bool addedPeople_ = false;
 
     QLineEdit* institution_ = nullptr;
+    QLineEdit* institutionDisplay_ = nullptr;
+    QHash<QString, QString> knownDisplayNames_;  // lowercased institution -> last display name used
+    bool displayEditedByUser_ = false;           // stop autofilling once the user types their own
     QLineEdit* type_ = nullptr;
     QLineEdit* lastFour_ = nullptr;
     QListWidget* owners_ = nullptr;

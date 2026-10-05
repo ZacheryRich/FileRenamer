@@ -14,7 +14,7 @@ namespace finrenamer {
 
 namespace {
 
-constexpr int kSchemaVersion = 1;
+constexpr int kSchemaVersion = 3;
 
 // Each entry upgrades the schema by one version. Never edit a shipped entry;
 // add a new one instead, so existing databases upgrade in place.
@@ -76,6 +76,20 @@ const char* const kMigrations[] = {
     CREATE INDEX idx_accounts_case ON accounts(case_id);
     CREATE INDEX idx_owners_person ON account_owners(person_id);
     )sql",
+
+    // Version 2: separate display name (used in filenames) for each person.
+    // Existing people keep showing their full name until edited.
+    R"sql(
+    ALTER TABLE people ADD COLUMN display_name TEXT NOT NULL DEFAULT '' COLLATE NOCASE;
+    UPDATE people SET display_name = full_name;
+    CREATE UNIQUE INDEX idx_people_display ON people(case_id, display_name);
+    )sql",
+
+    // Version 3: display name (abbreviation) for each account's institution.
+    R"sql(
+    ALTER TABLE accounts ADD COLUMN institution_display TEXT NOT NULL DEFAULT '';
+    UPDATE accounts SET institution_display = institution;
+    )sql",
 };
 
 static_assert(std::size(kMigrations) == kSchemaVersion,
@@ -87,6 +101,13 @@ std::string trimmed(const std::string& s)
     if (first == std::string::npos) return {};
     const auto last = s.find_last_not_of(" \t\r\n");
     return s.substr(first, last - first + 1);
+}
+
+// A blank institution display name is stored as the institution itself.
+std::string institutionDisplayOrDefault(const AccountRecord& a)
+{
+    std::string shown = trimmed(a.institutionDisplay);
+    return shown.empty() ? trimmed(a.institution) : shown;
 }
 
 }  // namespace
@@ -132,14 +153,53 @@ struct Database::Impl {
         if (!q.executeStep()) throw DatabaseError("That case no longer exists.");
     }
 
-    void requireUniquePerson(std::int64_t caseId, const std::string& name, std::int64_t exceptId)
+    // Full names and display names are each unique within a case (ignoring
+    // letter case), so no two people can produce the same filename.
+    void requireUniquePerson(std::int64_t caseId, const std::string& fullName,
+                             const std::string& displayName, std::int64_t exceptId)
     {
-        SQLite::Statement q(db, "SELECT 1 FROM people WHERE case_id = ? AND full_name = ? AND id <> ?");
+        SQLite::Statement full(db,
+            "SELECT 1 FROM people WHERE case_id = ? AND full_name = ? AND id <> ?");
+        full.bind(1, caseId);
+        full.bind(2, fullName);
+        full.bind(3, exceptId);
+        if (full.executeStep())
+            throw DatabaseError("\"" + fullName + "\" is already listed on this case.");
+
+        SQLite::Statement shown(db,
+            "SELECT full_name FROM people WHERE case_id = ? AND display_name = ? AND id <> ?");
+        shown.bind(1, caseId);
+        shown.bind(2, displayName);
+        shown.bind(3, exceptId);
+        if (shown.executeStep())
+            throw DatabaseError(shown.getColumn(0).getString() + " already shows as \"" +
+                                displayName + "\" in filenames. Choose a different display name.");
+    }
+
+    // Trims both names and fills in a blank display name. Throws if the full name is blank.
+    static std::pair<std::string, std::string> cleanNames(const std::string& fullName,
+                                                          const std::string& displayName)
+    {
+        std::string full = trimmed(fullName);
+        if (full.empty()) throw DatabaseError("Name is required.");
+        std::string shown = trimmed(displayName);
+        if (shown.empty()) shown = full;
+        return {std::move(full), std::move(shown)};
+    }
+
+    std::int64_t insertPerson(std::int64_t caseId, const std::string& fullName,
+                              const std::string& displayName)
+    {
+        auto [full, shown] = cleanNames(fullName, displayName);
+        requireUniquePerson(caseId, full, shown, 0);
+
+        SQLite::Statement q(db,
+            "INSERT INTO people (case_id, full_name, display_name) VALUES (?, ?, ?)");
         q.bind(1, caseId);
-        q.bind(2, name);
-        q.bind(3, exceptId);
-        if (q.executeStep())
-            throw DatabaseError("\"" + name + "\" is already listed on this case.");
+        q.bind(2, full);
+        q.bind(3, shown);
+        q.exec();
+        return db.getLastInsertRowid();
     }
 
     void validate(const AccountRecord& a)
@@ -199,6 +259,7 @@ struct Database::Impl {
         a.institution = q.getColumn(2).getString();
         a.accountType = q.getColumn(3).getString();
         a.lastFour = q.getColumn(4).getString();
+        a.institutionDisplay = q.getColumn(5).getString();
         return a;
     }
 };
@@ -225,16 +286,26 @@ int Database::schemaVersion() const { return impl_->userVersion(); }
 
 // ---- Cases ----------------------------------------------------------------
 
-std::int64_t Database::createCase(const ClientCase& c)
+std::vector<NewPerson> defaultCasePeople()
+{
+    return {{"Husband", "H"}, {"Wife", "W"}, {"Joint", "J"}};
+}
+
+std::int64_t Database::createCase(const ClientCase& c, const std::vector<NewPerson>& initialPeople)
 {
     const std::string name = trimmed(c.clientName);
     if (name.empty()) throw DatabaseError("Client name is required.");
 
+    SQLite::Transaction tx(impl_->db);
     SQLite::Statement q(impl_->db, "INSERT INTO cases (client_name, notes) VALUES (?, ?)");
     q.bind(1, name);
     q.bind(2, c.notes);
     q.exec();
-    return impl_->db.getLastInsertRowid();
+    const std::int64_t id = impl_->db.getLastInsertRowid();
+
+    for (const NewPerson& p : initialPeople) impl_->insertPerson(id, p.fullName, p.displayName);
+    tx.commit();
+    return id;
 }
 
 void Database::updateCase(const ClientCase& c)
@@ -286,33 +357,27 @@ std::vector<ClientCase> Database::listCases() const
 
 // ---- People ---------------------------------------------------------------
 
-std::int64_t Database::addPerson(std::int64_t caseId, const std::string& fullName)
+std::int64_t Database::addPerson(std::int64_t caseId, const std::string& fullName,
+                                 const std::string& displayName)
 {
-    const std::string name = trimmed(fullName);
-    if (name.empty()) throw DatabaseError("Name is required.");
     impl_->requireCase(caseId);
-    impl_->requireUniquePerson(caseId, name, 0);
-
-    SQLite::Statement q(impl_->db, "INSERT INTO people (case_id, full_name) VALUES (?, ?)");
-    q.bind(1, caseId);
-    q.bind(2, name);
-    q.exec();
-    return impl_->db.getLastInsertRowid();
+    return impl_->insertPerson(caseId, fullName, displayName);
 }
 
-void Database::renamePerson(std::int64_t personId, const std::string& fullName)
+void Database::updatePerson(std::int64_t personId, const std::string& fullName,
+                            const std::string& displayName)
 {
-    const std::string name = trimmed(fullName);
-    if (name.empty()) throw DatabaseError("Name is required.");
+    auto [full, shown] = Impl::cleanNames(fullName, displayName);
 
     SQLite::Statement find(impl_->db, "SELECT case_id FROM people WHERE id = ?");
     find.bind(1, personId);
     if (!find.executeStep()) throw DatabaseError("That person no longer exists.");
-    impl_->requireUniquePerson(find.getColumn(0).getInt64(), name, personId);
+    impl_->requireUniquePerson(find.getColumn(0).getInt64(), full, shown, personId);
 
-    SQLite::Statement q(impl_->db, "UPDATE people SET full_name = ? WHERE id = ?");
-    q.bind(1, name);
-    q.bind(2, personId);
+    SQLite::Statement q(impl_->db, "UPDATE people SET full_name = ?, display_name = ? WHERE id = ?");
+    q.bind(1, full);
+    q.bind(2, shown);
+    q.bind(3, personId);
     q.exec();
 }
 
@@ -343,12 +408,12 @@ void Database::deletePerson(std::int64_t personId)
 std::vector<Person> Database::listPeople(std::int64_t caseId) const
 {
     SQLite::Statement q(impl_->db,
-        "SELECT id, case_id, full_name FROM people WHERE case_id = ? ORDER BY full_name, id");
+        "SELECT id, case_id, full_name, display_name FROM people WHERE case_id = ? ORDER BY id");
     q.bind(1, caseId);
     std::vector<Person> out;
     while (q.executeStep())
         out.push_back({q.getColumn(0).getInt64(), q.getColumn(1).getInt64(),
-                       q.getColumn(2).getString()});
+                       q.getColumn(2).getString(), q.getColumn(3).getString()});
     return out;
 }
 
@@ -361,11 +426,13 @@ std::int64_t Database::createAccount(const AccountRecord& a)
 
     SQLite::Transaction tx(impl_->db);
     SQLite::Statement q(impl_->db,
-        "INSERT INTO accounts (case_id, institution, account_type, last_four) VALUES (?, ?, ?, ?)");
+        "INSERT INTO accounts (case_id, institution, account_type, last_four, institution_display)"
+        " VALUES (?, ?, ?, ?, ?)");
     q.bind(1, a.caseId);
     q.bind(2, trimmed(a.institution));
     q.bind(3, trimmed(a.accountType));
     q.bind(4, trimmed(a.lastFour));
+    q.bind(5, institutionDisplayOrDefault(a));
     q.exec();
     const std::int64_t id = impl_->db.getLastInsertRowid();
     impl_->writeOwners(id, a.ownerIds);
@@ -384,11 +451,13 @@ void Database::updateAccount(const AccountRecord& a)
 
     SQLite::Transaction tx(impl_->db);
     SQLite::Statement q(impl_->db,
-        "UPDATE accounts SET institution = ?, account_type = ?, last_four = ? WHERE id = ?");
+        "UPDATE accounts SET institution = ?, account_type = ?, last_four = ?, institution_display = ?"
+        " WHERE id = ?");
     q.bind(1, trimmed(a.institution));
     q.bind(2, trimmed(a.accountType));
     q.bind(3, trimmed(a.lastFour));
-    q.bind(4, a.id);
+    q.bind(4, institutionDisplayOrDefault(a));
+    q.bind(5, a.id);
     q.exec();
     impl_->writeOwners(a.id, a.ownerIds);
     tx.commit();
@@ -404,7 +473,8 @@ void Database::deleteAccount(std::int64_t accountId)
 std::optional<AccountRecord> Database::getAccount(std::int64_t accountId) const
 {
     SQLite::Statement q(impl_->db,
-        "SELECT id, case_id, institution, account_type, last_four FROM accounts WHERE id = ?");
+        "SELECT id, case_id, institution, account_type, last_four, institution_display"
+        " FROM accounts WHERE id = ?");
     q.bind(1, accountId);
     if (!q.executeStep()) return std::nullopt;
     AccountRecord a = Impl::readAccountRow(q);
@@ -415,7 +485,7 @@ std::optional<AccountRecord> Database::getAccount(std::int64_t accountId) const
 std::vector<AccountRecord> Database::listAccountRecords(std::int64_t caseId) const
 {
     SQLite::Statement q(impl_->db, R"sql(
-        SELECT id, case_id, institution, account_type, last_four FROM accounts
+        SELECT id, case_id, institution, account_type, last_four, institution_display FROM accounts
         WHERE case_id = ?
         ORDER BY institution COLLATE NOCASE, account_type COLLATE NOCASE, last_four, id)sql");
     q.bind(1, caseId);
@@ -428,7 +498,7 @@ std::vector<AccountRecord> Database::listAccountRecords(std::int64_t caseId) con
 std::vector<Account> Database::loadAccounts(std::int64_t caseId) const
 {
     SQLite::Statement names(impl_->db, R"sql(
-        SELECT p.full_name FROM account_owners o JOIN people p ON p.id = o.person_id
+        SELECT p.display_name FROM account_owners o JOIN people p ON p.id = o.person_id
         WHERE o.account_id = ? ORDER BY o.position)sql");
 
     std::vector<Account> out;
@@ -437,6 +507,7 @@ std::vector<Account> Database::loadAccounts(std::int64_t caseId) const
         a.id = r.id;
         a.caseId = r.caseId;
         a.institution = r.institution;
+        a.institutionDisplay = r.institutionDisplay;
         a.accountType = r.accountType;
         a.lastFour = r.lastFour;
 
@@ -457,6 +528,20 @@ std::vector<std::string> Database::accountTypeSuggestions() const
         ORDER BY 1 COLLATE NOCASE)sql");
     std::vector<std::string> out;
     while (q.executeStep()) out.push_back(q.getColumn(0).getString());
+    return out;
+}
+
+std::vector<InstitutionName> Database::institutionSuggestions() const
+{
+    // One row per institution (ignoring letter case): the most recently added account's.
+    SQLite::Statement q(impl_->db, R"sql(
+        SELECT a.institution, a.institution_display FROM accounts a
+        WHERE a.id = (SELECT MAX(b.id) FROM accounts b
+                      WHERE b.institution = a.institution COLLATE NOCASE)
+        ORDER BY a.institution COLLATE NOCASE)sql");
+    std::vector<InstitutionName> out;
+    while (q.executeStep())
+        out.push_back({q.getColumn(0).getString(), q.getColumn(1).getString()});
     return out;
 }
 

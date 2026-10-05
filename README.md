@@ -12,7 +12,7 @@ with optional subfolders by account (full label), by year, or both.
 
 - [x] `core/`: date modes, filename builder, folder planner, rename plan, rename/undo engine
 - [x] `core/Database`: SQLite storage (cases, people, accounts, rename history)
-- [x] `tests/`: Catch2 suite (43 tests)
+- [x] `tests/`: Catch2 suite (49 tests)
 - [x] `app/`: Qt 6 main window (cases, people, accounts) and dialogs
 - [ ] Rename screen (file table, date modes, sorting, apply/undo)
 - [ ] PDF preview pane

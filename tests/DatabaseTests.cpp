@@ -4,6 +4,9 @@
 #include "TestHelpers.h"
 #include "finrenamer/Database.h"
 #include "finrenamer/FilenameBuilder.h"
+#include "finrenamer/FolderPlanner.h"
+
+#include <SQLiteCpp/SQLiteCpp.h>
 
 using namespace finrenamer;
 namespace fs = std::filesystem;
@@ -20,7 +23,7 @@ struct SmithCase {
     std::int64_t addAccount(std::string inst, std::string type, std::string four,
                             std::vector<std::int64_t> owners)
     {
-        return db.createAccount({0, caseId, inst, type, four, owners});
+        return db.createAccount({0, caseId, inst, "", type, four, owners});
     }
 };
 
@@ -32,13 +35,13 @@ TEST_CASE("A new database is created at the current schema version")
     const fs::path file = dir.path() / "finrenamer.db";
     {
         Database db(file);
-        CHECK(db.schemaVersion() == 1);
+        CHECK(db.schemaVersion() == 3);
         db.createCase({0, "Persisted", ""});
     }
     CHECK(fs::exists(file));
 
     Database reopened(file);  // reopening must not re-run migrations
-    CHECK(reopened.schemaVersion() == 1);
+    CHECK(reopened.schemaVersion() == 3);
     REQUIRE(reopened.listCases().size() == 1);
     CHECK(reopened.listCases()[0].clientName == "Persisted");
 }
@@ -80,14 +83,14 @@ TEST_CASE("People: names are unique per case, ignoring letter case")
     const auto other = s.db.createCase({0, "Other Client", ""});
     CHECK_NOTHROW(s.db.addPerson(other, "John Smith"));  // fine on another case
 
-    s.db.renamePerson(s.john, "John Q. Smith");
-    CHECK_THROWS_AS(s.db.renamePerson(s.john, "JANE SMITH"), DatabaseError);
-    CHECK_NOTHROW(s.db.renamePerson(s.john, "john q. smith"));  // own name, new casing
+    s.db.updatePerson(s.john, "John Q. Smith", "");
+    CHECK_THROWS_AS(s.db.updatePerson(s.john, "JANE SMITH", ""), DatabaseError);
+    CHECK_NOTHROW(s.db.updatePerson(s.john, "john q. smith", ""));  // own name, new casing
 
-    const auto people = s.db.listPeople(s.caseId);
+    const auto people = s.db.listPeople(s.caseId);  // in the order they were added
     REQUIRE(people.size() == 2);
-    CHECK(people[0].fullName == "Jane Smith");
-    CHECK(people[1].fullName == "john q. smith");
+    CHECK(people[0].fullName == "john q. smith");
+    CHECK(people[1].fullName == "Jane Smith");
 }
 
 TEST_CASE("Accounts keep owners in display order")
@@ -100,11 +103,11 @@ TEST_CASE("Accounts keep owners in display order")
     CHECK(accounts[0].owners == std::vector<std::string>{"John Smith", "Jane Smith"});
     CHECK(accountLabel(accounts[0]) == "Chase Checking 1234 (John Smith; Jane Smith)");
 
-    s.db.updateAccount({id, s.caseId, "Chase", "Checking", "1234", {s.jane, s.john}});
+    s.db.updateAccount({id, s.caseId, "Chase", "", "Checking", "1234", {s.jane, s.john}});
     accounts = s.db.loadAccounts(s.caseId);
     CHECK(accounts[0].owners == std::vector<std::string>{"Jane Smith", "John Smith"});
 
-    s.db.updateAccount({id, s.caseId, "Chase", "Checking", "1234", {}});
+    s.db.updateAccount({id, s.caseId, "Chase", "", "Checking", "1234", {}});
     CHECK(s.db.loadAccounts(s.caseId)[0].owners.empty());
 }
 
@@ -114,7 +117,7 @@ TEST_CASE("Renaming a person updates every account they own")
     s.addAccount("Chase", "Checking", "1234", {s.john, s.jane});
     s.addAccount("Fidelity", "Brokerage", "5678", {s.john});
 
-    s.db.renamePerson(s.john, "Jonathan Smith");
+    s.db.updatePerson(s.john, "Jonathan Smith", "");
     for (const auto& a : s.db.loadAccounts(s.caseId))
         CHECK(a.owners.front() == "Jonathan Smith");
 }
@@ -195,7 +198,7 @@ TEST_CASE("A saved batch reloads exactly and can still be undone after reopening
         Database db(dbFile);
         const auto caseId = db.createCase({0, "Núñez", ""});
         const auto jose = db.addPerson(caseId, "José Núñez");
-        db.createAccount({0, caseId, "Banco Popular", "Ahorros", "9876", {jose}});
+        db.createAccount({0, caseId, "Banco Popular", "", "Ahorros", "9876", {jose}});
         const auto accounts = db.loadAccounts(caseId);
 
         PlanOptions opts;
@@ -245,4 +248,149 @@ TEST_CASE("History lists the newest batch first")
     REQUIRE(history.size() == 2);
     CHECK(history[0].batchId == "third");
     CHECK(history[1].batchId == "second");
+}
+
+TEST_CASE("Display names are used in filenames; blank means the full name")
+{
+    SmithCase s;
+    const auto p = s.db.listPeople(s.caseId);
+    CHECK(p[0].displayName == "John Smith");  // added without a display name
+
+    s.db.updatePerson(s.john, "John Smith", " JS ");
+    s.addAccount("Chase", "Checking", "1234", {s.john, s.jane});
+    const auto accounts = s.db.loadAccounts(s.caseId);
+    CHECK(accountLabel(accounts[0]) == "Chase Checking 1234 (JS; Jane Smith)");
+    CHECK(s.db.listPeople(s.caseId)[0].fullName == "John Smith");
+}
+
+TEST_CASE("No two people on a case can show the same display name")
+{
+    SmithCase s;
+    s.db.updatePerson(s.john, "John Smith", "J");
+    CHECK_THROWS_WITH(s.db.addPerson(s.caseId, "Joint", "j"),
+                      ContainsSubstring("John Smith already shows as"));
+    CHECK_THROWS_AS(s.db.updatePerson(s.jane, "Jane Smith", "J"), DatabaseError);
+    // A display name may match someone's full name only if it is that same person.
+    CHECK_THROWS_AS(s.db.addPerson(s.caseId, "Jonathan", "Jane Smith"), DatabaseError);
+
+    const auto other = s.db.createCase({0, "Other", ""});
+    CHECK_NOTHROW(s.db.addPerson(other, "Joint", "J"));  // other cases are separate
+}
+
+TEST_CASE("New cases can start with Husband, Wife and Joint")
+{
+    Database db = Database::openInMemory();
+    const auto id = db.createCase({0, "Smith Divorce", ""}, defaultCasePeople());
+
+    const auto people = db.listPeople(id);
+    REQUIRE(people.size() == 3);
+    CHECK(people[0].fullName == "Husband");
+    CHECK(people[0].displayName == "H");
+    CHECK(people[1].fullName == "Wife");
+    CHECK(people[1].displayName == "W");
+    CHECK(people[2].fullName == "Joint");
+    CHECK(people[2].displayName == "J");
+
+    db.createAccount({0, id, "Chase", "", "Checking", "1234", {people[2].id}});
+    CHECK(accountLabel(db.loadAccounts(id)[0]) == "Chase Checking 1234 (J)");
+
+    // Defaults are ordinary people: they can be renamed or removed.
+    db.updatePerson(people[0].id, "John Smith", "H");
+    db.deletePerson(people[1].id);
+    CHECK(db.listPeople(id).size() == 2);
+
+    // Without the list, a case starts empty.
+    CHECK(db.listPeople(db.createCase({0, "Empty", ""})).empty());
+}
+
+TEST_CASE("A version 1 database is upgraded and keeps its data")
+{
+    testing::TempDir dir;
+    const fs::path file = dir.path() / "old.db";
+    {
+        // The schema exactly as the first release created it.
+        SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE);
+        old.exec(R"sql(
+            CREATE TABLE cases (id INTEGER PRIMARY KEY, client_name TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '');
+            CREATE TABLE people (id INTEGER PRIMARY KEY,
+                case_id INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+                full_name TEXT NOT NULL COLLATE NOCASE, UNIQUE (case_id, full_name));
+            CREATE TABLE accounts (id INTEGER PRIMARY KEY,
+                case_id INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+                institution TEXT NOT NULL, account_type TEXT NOT NULL, last_four TEXT NOT NULL);
+            CREATE TABLE account_owners (
+                account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE RESTRICT,
+                position INTEGER NOT NULL, PRIMARY KEY (account_id, person_id));
+            CREATE TABLE rename_batches (batch_id TEXT PRIMARY KEY,
+                case_id INTEGER REFERENCES cases(id) ON DELETE SET NULL, root TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                undone INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE rename_log (
+                batch_id TEXT NOT NULL REFERENCES rename_batches(batch_id) ON DELETE CASCADE,
+                seq INTEGER NOT NULL, from_path TEXT NOT NULL, to_path TEXT NOT NULL,
+                PRIMARY KEY (batch_id, seq));
+            CREATE TABLE created_folders (
+                batch_id TEXT NOT NULL REFERENCES rename_batches(batch_id) ON DELETE CASCADE,
+                seq INTEGER NOT NULL, path TEXT NOT NULL, PRIMARY KEY (batch_id, seq));
+            INSERT INTO cases (id, client_name) VALUES (1, 'Old Case');
+            INSERT INTO people (id, case_id, full_name) VALUES (1, 1, 'José Núñez');
+            INSERT INTO accounts (id, case_id, institution, account_type, last_four)
+                VALUES (1, 1, 'Chase', 'Checking', '1234');
+            INSERT INTO account_owners VALUES (1, 1, 0);
+            PRAGMA user_version = 1;
+        )sql");
+    }
+
+    Database db(file);
+    CHECK(db.schemaVersion() == 3);
+    const auto people = db.listPeople(1);
+    REQUIRE(people.size() == 1);
+    CHECK(people[0].displayName == "José Núñez");
+    CHECK(accountLabel(db.loadAccounts(1)[0]) == "Chase Checking 1234 (José Núñez)");
+
+    db.updatePerson(1, "José Núñez", "JN");
+    CHECK(accountLabel(db.loadAccounts(1)[0]) == "Chase Checking 1234 (JN)");
+
+    // Version 3 gave existing accounts their institution as the display name.
+    CHECK(db.getAccount(1)->institutionDisplay == "Chase");
+}
+
+TEST_CASE("Institution display names are used in filenames and folder names")
+{
+    SmithCase s;
+    const auto id = s.db.createAccount({0, s.caseId, "Bank of America", "BofA", "Checking", "1234", {s.john}});
+
+    const auto record = s.db.getAccount(id);
+    CHECK(record->institution == "Bank of America");
+    CHECK(record->institutionDisplay == "BofA");
+
+    const auto account = s.db.loadAccounts(s.caseId)[0];
+    CHECK(accountLabel(account) == "BofA Checking 1234 (John Smith)");
+    SortOptions byAccount;
+    byAccount.byAccount = true;
+    CHECK(subfolderFor(account, Quarter{2026, 1}, byAccount) == fs::path("BofA Checking 1234 (John Smith)"));
+
+    // Blank display name = the full institution.
+    s.db.updateAccount({id, s.caseId, "Bank of America", "  ", "Checking", "1234", {s.john}});
+    CHECK(s.db.getAccount(id)->institutionDisplay == "Bank of America");
+    CHECK(accountLabel(s.db.loadAccounts(s.caseId)[0]) == "Bank of America Checking 1234 (John Smith)");
+}
+
+TEST_CASE("Institution suggestions remember the latest abbreviation for each bank")
+{
+    SmithCase s;
+    s.db.createAccount({0, s.caseId, "Bank of America", "BOA", "Checking", "1", {}});
+    s.db.createAccount({0, s.caseId, "bank of america", "BofA", "Savings", "2", {}});  // newer
+    s.db.createAccount({0, s.caseId, "Charles Schwab", "", "Brokerage", "3", {}});
+
+    const auto other = s.db.createCase({0, "Other", ""});
+    s.db.createAccount({0, other, "Ally", "", "Savings", "4", {}});  // other cases count too
+
+    const auto names = s.db.institutionSuggestions();
+    REQUIRE(names.size() == 3);
+    CHECK(names[0].institution == "Ally");
+    CHECK(names[1].institution == "bank of america");
+    CHECK(names[1].displayName == "BofA");
+    CHECK(names[2].displayName == "Charles Schwab");
 }

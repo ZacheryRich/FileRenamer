@@ -22,6 +22,13 @@ inline std::string stdstr(const QString& s) { return s.toStdString(); }
 inline std::filesystem::path toPath(const QString& s) { return finrenamer::pathFromUtf8(s.toStdString()); }
 inline QString qpath(const std::filesystem::path& p) { return QString::fromStdString(finrenamer::utf8FromPath(p)); }
 
+// "Husband (H)", or just "John Smith" when the display name is the same.
+inline QString personLabel(const finrenamer::Person& p)
+{
+    if (p.displayName == p.fullName) return qstr(p.fullName);
+    return QStringLiteral("%1 (%2)").arg(qstr(p.fullName), qstr(p.displayName));
+}
+
 // Runs a database call and shows any error in a message box.
 // Returns true if the call succeeded.
 //   DatabaseError -> a rule the user can fix; shown as-is.
