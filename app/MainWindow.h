@@ -19,6 +19,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     MainWindow(finrenamer::Database& db, const QString& dataFolder, QWidget* parent = nullptr);
+    ~MainWindow() override;
 
     void selectCase(std::int64_t caseId);
 
@@ -46,6 +47,7 @@ private:
     void addAccount();
     void editAccount();
     void deleteAccount();
+    void renameFiles();
 
     finrenamer::Database& db_;
     QString dataFolder_;

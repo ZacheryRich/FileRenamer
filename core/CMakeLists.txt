@@ -23,6 +23,7 @@ add_library(finrenamer_core STATIC
     src/FolderPlanner.cpp
     src/FileScanner.cpp
     src/RenamePlan.cpp
+    src/RenameSession.cpp
     src/RenameEngine.cpp
     src/Utf8Path.cpp
 )

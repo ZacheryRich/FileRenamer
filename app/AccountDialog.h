@@ -23,6 +23,7 @@ class AccountDialog : public QDialog {
 public:
     AccountDialog(finrenamer::Database& db, std::int64_t caseId,
                   std::optional<finrenamer::AccountRecord> existing, QWidget* parent = nullptr);
+    ~AccountDialog() override;
 
     std::int64_t savedAccountId() const { return savedId_; }
 

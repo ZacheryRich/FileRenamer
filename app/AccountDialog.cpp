@@ -183,6 +183,11 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
     updateState();
 }
 
+AccountDialog::~AccountDialog()
+{
+    disconnectChildren(this);
+}
+
 void AccountDialog::reloadPeopleChoices()
 {
     std::set<qlonglong> taken;

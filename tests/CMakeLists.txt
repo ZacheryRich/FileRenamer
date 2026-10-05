@@ -17,6 +17,7 @@ add_executable(finrenamer_tests
     RenamePlanTests.cpp
     RenameEngineTests.cpp
     DatabaseTests.cpp
+    RenameSessionTests.cpp
 )
 # SQLiteCpp is linked directly only so a test can build an old-format database.
 target_link_libraries(finrenamer_tests PRIVATE finrenamer_core SQLiteCpp Catch2::Catch2WithMain)

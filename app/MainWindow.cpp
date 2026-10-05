@@ -23,7 +23,9 @@
 
 #include "AccountDialog.h"
 #include "CaseDialog.h"
+#include "HistoryDialog.h"
 #include "PersonDialog.h"
+#include "RenameWindow.h"
 #include "QtHelpers.h"
 
 using namespace finrenamer;
@@ -89,6 +91,11 @@ MainWindow::MainWindow(Database& db, const QString& dataFolder, QWidget* parent)
     reloadCases();
 }
 
+MainWindow::~MainWindow()
+{
+    disconnectChildren(this);
+}
+
 // ---------------------------------------------------------------------------
 // Layout
 
@@ -129,8 +136,10 @@ void MainWindow::buildUi()
     caseNotes_->setStyleSheet("color: palette(placeholder-text);");
 
     renameFilesBtn_ = new QPushButton(tr("Rename Files..."));
-    renameFilesBtn_->setEnabled(false);
-    renameFilesBtn_->setToolTip(tr("The rename screen is the next step to be built."));
+    renameFilesBtn_->setToolTip(tr("Choose a folder of statements and rename them using this case's accounts"));
+    QFont big = renameFilesBtn_->font();
+    big.setBold(true);
+    renameFilesBtn_->setFont(big);
 
     auto* header = new QHBoxLayout;
     auto* titles = new QVBoxLayout;
@@ -193,6 +202,7 @@ void MainWindow::buildUi()
     connect(caseList_, &QListWidget::currentItemChanged, this, &MainWindow::showSelectedCase);
     connect(caseList_, &QListWidget::itemDoubleClicked, this, &MainWindow::editCase);
     connect(newCaseBtn, &QPushButton::clicked, this, &MainWindow::newCase);
+    connect(renameFilesBtn_, &QPushButton::clicked, this, &MainWindow::renameFiles);
     connect(editCaseBtn_, &QPushButton::clicked, this, &MainWindow::editCase);
     connect(deleteCaseBtn_, &QPushButton::clicked, this, &MainWindow::deleteCase);
 
@@ -215,6 +225,12 @@ void MainWindow::buildMenus()
 
     QAction* newCase = file->addAction(tr("&New Case..."), this, &MainWindow::newCase);
     newCase->setShortcut(QKeySequence::New);
+
+    QAction* history = file->addAction(tr("Rename &History..."), this, [this] {
+        HistoryDialog dialog(db_, this);
+        dialog.exec();
+    });
+    history->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_H));
 
     file->addAction(tr("Show &Data Folder"), this, [this] {
         QDesktopServices::openUrl(QUrl::fromLocalFile(dataFolder_));
@@ -342,6 +358,7 @@ void MainWindow::reloadAccounts(std::optional<std::int64_t> select)
 void MainWindow::updateButtons()
 {
     const bool hasCase = currentCaseId().has_value();
+    renameFilesBtn_->setEnabled(hasCase);
     editCaseBtn_->setEnabled(hasCase);
     deleteCaseBtn_->setEnabled(hasCase);
 
@@ -524,5 +541,23 @@ void MainWindow::deleteAccount()
     if (answer != QMessageBox::Yes) return;
 
     if (runGuarded(this, [&] { db_.deleteAccount(*id); })) reloadAccounts();
+    updateButtons();
+}
+
+// ---------------------------------------------------------------------------
+// Renaming
+
+void MainWindow::renameFiles()
+{
+    const auto caseId = currentCaseId();
+    if (!caseId) return;
+
+    RenameWindow window(db_, *caseId, this);
+    if (!window.promptForFolder()) return;
+    window.exec();
+
+    // Accounts or people may have been added from the rename screen.
+    reloadPeople();
+    reloadAccounts();
     updateButtons();
 }
