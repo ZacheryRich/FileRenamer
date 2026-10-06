@@ -80,6 +80,7 @@ std::vector<PlanInput> RenameSession::pendingInputs(std::vector<std::size_t>& ro
         in.source = r.path;
         in.skip = r.skip;
         in.date = r.date;
+        in.number = r.number;
         if (r.accountId)
             if (const Account* a = findAccount(*r.accountId)) in.account = *a;
         inputs.push_back(std::move(in));
@@ -113,6 +114,7 @@ bool RenameSession::carryForward(std::size_t from, std::size_t to)
     if (!src.accountId && !src.date) return false;
 
     dst.accountId = src.accountId;
+    dst.number = src.number;
     if (src.date) dst.date = nextDateSpec(*src.date);
     return true;
 }

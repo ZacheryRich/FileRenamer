@@ -32,6 +32,7 @@ struct AccountRecord {
     std::string accountType;
     std::string lastFour;
     std::vector<std::int64_t> ownerIds;
+    std::vector<std::string> previousLastFour;  // older numbers of this same account, newest first
 };
 
 // A person to add when creating a case.
@@ -98,12 +99,18 @@ public:
 
     // ---- Accounts -------------------------------------------------------
     std::int64_t createAccount(const AccountRecord& a);  // a.id is ignored
-    void updateAccount(const AccountRecord& a);          // replaces owners too
+    // Replaces owners and numbers too. `numberCorrections` lists numbers whose
+    // text was corrected in this edit (old -> new, e.g. a typo "1243" -> "1234"),
+    // so files named with the old text get the corrected number. Numbers simply
+    // added, removed or reordered need no entry.
+    using NumberCorrections = std::vector<std::pair<std::string, std::string>>;
+    void updateAccount(const AccountRecord& a, const NumberCorrections& numberCorrections = {});
     void deleteAccount(std::int64_t accountId);
     std::optional<AccountRecord> getAccount(std::int64_t accountId) const;
     std::vector<AccountRecord> listAccountRecords(std::int64_t caseId) const;
 
-    // Accounts with owners' display names filled in, ready for FilenameBuilder/RenamePlan.
+    // Accounts with owners' display names (and previous numbers) filled in,
+    // ready for FilenameBuilder/RenamePlan.
     // Sorted by institution, type, last four.
     std::vector<Account> loadAccounts(std::int64_t caseId) const;
 
@@ -114,6 +121,10 @@ public:
     // Every institution used so far (across all cases), each with the display
     // name from its most recently added account. For autocomplete/autofill.
     std::vector<InstitutionName> institutionSuggestions() const;
+
+    // Names this case's accounts used before edits changed them (recorded
+    // automatically by updateAccount/updatePerson), for the name fixer.
+    std::vector<OldAccountName> oldAccountNames(std::int64_t caseId) const;
 
     // ---- Rename history -------------------------------------------------
     void saveBatch(const BatchRecord& batch, std::optional<std::int64_t> caseId);

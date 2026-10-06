@@ -19,6 +19,7 @@ struct SessionRow {
     std::filesystem::path path;          // where the file is now
     std::filesystem::path originalPath;  // where it was when first listed
     std::optional<std::int64_t> accountId;
+    std::string number;  // a previous number of that account; empty = current
     std::optional<DateSpec> date;
     bool skip = false;
     bool done = false;     // renamed during this session; `path` is the new location
@@ -59,8 +60,9 @@ public:
     // Unchanged with their new location.
     std::vector<PlannedMove> preview(const PlanOptions& options) const;
 
-    // Carry-forward: if row `to` is blank, give it row `from`'s account and the
-    // following date (see nextDateSpec). Returns true if anything was filled in.
+    // Carry-forward: if row `to` is blank, give it row `from`'s account (and
+    // chosen number) and the following date (see nextDateSpec). Returns true if
+    // anything was filled in.
     bool carryForward(std::size_t from, std::size_t to);
 
     // Index of the next row after `from` that hasn't been renamed, if any.

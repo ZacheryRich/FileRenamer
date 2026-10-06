@@ -14,13 +14,19 @@ namespace finrenamer {
 // collapsed, and leading/trailing spaces and trailing dots are trimmed.
 std::string sanitizeComponent(std::string_view text);
 
-// "Chase Checking 1234 (John Smith; Jane Smith)"
-// Also used as the account subfolder name.
-std::string accountLabel(const Account& account);
+// The label used in file names: "Chase Checking 1234 (John Smith; Jane Smith)".
+// `number` picks one of the account's previous numbers instead of the current
+// one (empty = current).
+std::string accountLabel(const Account& account, std::string_view number = {});
+
+// The account folder name: the current number, then any previous numbers:
+// "Chase Credit Card 9012 (was x5678, x1234) (H)". Without previous numbers it
+// is the same as accountLabel().
+std::string accountFolderLabel(const Account& account);
 
 // "2026.01.31 Chase Checking 1234 (John Smith; Jane Smith).pdf"
 std::string buildFilename(const Account& account, const DateSpec& date,
-                          std::string_view extension = ".pdf");
+                          std::string_view extension = ".pdf", std::string_view number = {});
 
 // Institution, account type and last four are required; owners are optional
 // (the parenthesised part is omitted when there are none).

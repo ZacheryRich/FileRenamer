@@ -16,7 +16,8 @@ struct SortOptions {
 };
 
 // Relative subfolder (possibly empty) a file should land in, e.g.
-// "Chase Checking 1234 (John Smith)/2026".
+// "Chase Checking 1234 (John Smith)/2026". The account folder uses
+// accountFolderLabel(), so it lists previous numbers too.
 std::filesystem::path subfolderFor(const Account& account, const DateSpec& date,
                                    const SortOptions& options);
 

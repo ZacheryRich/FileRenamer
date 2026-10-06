@@ -5,6 +5,8 @@
 #include <QDate>
 #include <QHBoxLayout>
 #include <QIntValidator>
+#include <QKeyEvent>
+#include <QLocale>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -46,12 +48,44 @@ QWidget* row(std::initializer_list<QWidget*> widgets)
 // ---------------------------------------------------------------------------
 // DateField
 
+namespace {
+
+constexpr int kMaxDigits[3] = {4, 2, 2};
+
+bool isSeparator(QChar c)
+{
+    return c == u'/' || c == u'.' || c == u'-' || c == u' ' || c == u',';
+}
+
+// "20260131" (the filename order) -- parseUserDate reads 8 digits as MMDDYYYY.
+std::optional<year_month_day> parseYmdDigits(const QString& digits)
+{
+    if (digits.size() != 8) return std::nullopt;
+    const year_month_day d = makeDate(digits.left(4).toInt(), digits.mid(4, 2).toUInt(), digits.mid(6, 2).toUInt());
+    if (!d.ok() || static_cast<int>(d.year()) < 1900) return std::nullopt;
+    return d;
+}
+
+}  // namespace
+
 DateField::DateField(QWidget* parent) : QWidget(parent)
 {
-    edit_ = new QLineEdit;
-    edit_->setPlaceholderText(tr("MM/DD/YYYY"));
-    edit_->setMaxLength(12);
-    edit_->setFixedWidth(edit_->fontMetrics().horizontalAdvance(QStringLiteral("00/00/00000")) + 16);
+    const char* names[3] = {"year", "month", "day"};
+    const QString placeholders[3] = {tr("YYYY"), tr("MM"), tr("DD")};
+    const QString tips[3] = {tr("Year (4 digits; 26 becomes 2026)"), tr("Month (1-12)"), tr("Day")};
+    for (int i = 0; i < 3; ++i) {
+        auto* e = new QLineEdit;
+        e->setObjectName(QString::fromLatin1(names[i]));
+        e->setPlaceholderText(placeholders[i]);
+        e->setToolTip(tips[i]);
+        e->setProperty("baseTip", tips[i]);
+        e->setAlignment(Qt::AlignCenter);
+        e->setMaxLength(16);  // room to paste a whole date
+        e->setFixedWidth(e->fontMetrics().horizontalAdvance(i == Year ? QStringLiteral("YYYYY")
+                                                                     : QStringLiteral("MMM")) + 14);
+        e->installEventFilter(this);
+        parts_[i] = e;
+    }
 
     // Calendar in a drop-down menu.
     auto* calendar = new QCalendarWidget;
@@ -66,7 +100,7 @@ DateField::DateField(QWidget* parent) : QWidget(parent)
     calendarButton_->setToolTip(tr("Pick from a calendar"));
     calendarButton_->setPopupMode(QToolButton::InstantPopup);
     calendarButton_->setMenu(menu);
-    calendarButton_->setFocusPolicy(Qt::NoFocus);  // Tab goes field to field
+    calendarButton_->setFocusPolicy(Qt::NoFocus);  // Tab goes box to box
 
     connect(menu, &QMenu::aboutToShow, this, [this, calendar] {
         const auto d = date();
@@ -80,25 +114,33 @@ DateField::DateField(QWidget* parent) : QWidget(parent)
         emit changed();
     });
 
-    connect(edit_, &QLineEdit::textChanged, this, [this] {
-        updateStyle();
-        emit changed();
-    });
-    // Tidy the text once the user leaves the box: "13126" stays red, "1/31/26" -> "01/31/2026".
-    connect(edit_, &QLineEdit::editingFinished, this, [this] {
-        if (const auto d = date()) {
-            const QString tidy = ui::qstr(formatUserDate(*d));
-            if (edit_->text() != tidy) edit_->setText(tidy);
-        }
-    });
+    for (int i = 0; i < 3; ++i) {
+        const Part part = static_cast<Part>(i);
+        connect(parts_[i], &QLineEdit::textEdited, this, [this, part](const QString& t) { edited(part, t); });
+        connect(parts_[i], &QLineEdit::textChanged, this, [this] {
+            updateStyle();
+            emit changed();
+        });
+        connect(parts_[i], &QLineEdit::editingFinished, this, [this, part] { tidy(part); });
+    }
 
+    auto separator = [] {
+        auto* l = new QLabel(QStringLiteral("."));
+        l->setContentsMargins(0, 0, 0, 0);
+        return l;
+    };
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(2);
-    layout->addWidget(edit_);
+    layout->addWidget(parts_[Year]);
+    layout->addWidget(separator());
+    layout->addWidget(parts_[Month]);
+    layout->addWidget(separator());
+    layout->addWidget(parts_[Day]);
+    layout->addSpacing(2);
     layout->addWidget(calendarButton_);
-    setFocusProxy(edit_);
-    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);  // box and button stay together
+    setFocusProxy(parts_[Year]);
+    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);  // boxes and button stay together
 }
 
 DateField::~DateField()
@@ -106,34 +148,179 @@ DateField::~DateField()
     ui::disconnectChildren(this);
 }
 
+int DateField::value(Part part) const
+{
+    bool ok = false;
+    const int v = parts_[part]->text().trimmed().toInt(&ok);
+    return ok ? v : -1;
+}
+
 std::optional<year_month_day> DateField::date() const
 {
-    return parseUserDate(ui::stdstr(edit_->text()));
+    const QString y = parts_[Year]->text().trimmed();
+    int year = value(Year), month = value(Month), day = value(Day);
+    if (year < 0 || month < 0 || day < 0) return std::nullopt;
+    if (y.size() == 2) year += 2000;  // "26" before the box is tidied
+    else if (y.size() != 4 || year < 1900) return std::nullopt;
+    if (month < 1 || month > 12 || day < 1 || day > 31) return std::nullopt;
+    const year_month_day d = makeDate(year, static_cast<unsigned>(month), static_cast<unsigned>(day));
+    if (!d.ok()) return std::nullopt;
+    return d;
+}
+
+QString DateField::problem() const
+{
+    const QString y = parts_[Year]->text().trimmed();
+    const int month = value(Month), day = value(Day);
+    if (!parts_[Year]->hasFocus() && !y.isEmpty() && y.size() != 2 && y.size() != 4)
+        return tr("Type the year with 4 digits.");
+    if (y.size() == 4 && value(Year) < 1900) return tr("That year is too early.");
+    if (!parts_[Month]->text().trimmed().isEmpty() && (month > 12 || (month == 0 && parts_[Month]->text().size() == 2)))
+        return tr("The month must be 1 to 12.");
+    if (!parts_[Day]->text().trimmed().isEmpty() && (day > 31 || (day == 0 && parts_[Day]->text().size() == 2)))
+        return tr("The day must be 1 to 31.");
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && !date() && value(Year) >= 0 &&
+        (y.size() == 2 || y.size() == 4)) {
+        const int year = y.size() == 2 ? value(Year) + 2000 : value(Year);
+        return tr("%1 %2 has no day %3.").arg(QLocale(QLocale::English).monthName(month)).arg(year).arg(day);
+    }
+    return {};
 }
 
 bool DateField::hasInvalidText() const
 {
-    return !edit_->text().trimmed().isEmpty() && !date();
+    return !problem().isEmpty();
 }
 
 void DateField::setDate(std::optional<year_month_day> d)
 {
-    const QSignalBlocker block(edit_);
-    edit_->setText(d ? ui::qstr(formatUserDate(*d)) : QString());
+    const QSignalBlocker b0(parts_[Year]), b1(parts_[Month]), b2(parts_[Day]);
+    if (d) {
+        parts_[Year]->setText(QString::number(static_cast<int>(d->year())));
+        parts_[Month]->setText(QStringLiteral("%1").arg(static_cast<unsigned>(d->month()), 2, 10, QLatin1Char('0')));
+        parts_[Day]->setText(QStringLiteral("%1").arg(static_cast<unsigned>(d->day()), 2, 10, QLatin1Char('0')));
+    } else {
+        for (auto* e : parts_) e->clear();
+    }
     updateStyle();
 }
 
 void DateField::focusAndSelect()
 {
-    edit_->setFocus();
-    edit_->selectAll();
+    focusPart(parts_[Year]->text().trimmed().size() == 4 ? Month : Year);
+}
+
+void DateField::focusPart(Part part)
+{
+    parts_[part]->setFocus();
+    parts_[part]->selectAll();
+}
+
+// Called for the user's own typing and pasting only (not setText).
+void DateField::edited(Part part, const QString& text)
+{
+    QString digits;
+    bool trailingSeparator = false, other = false;
+    for (int i = 0; i < text.size(); ++i) {
+        if (text[i].isDigit()) digits += text[i];
+        else if (isSeparator(text[i]) && i == text.size() - 1) trailingSeparator = true;
+        else other = true;
+    }
+
+    // A whole date typed or pasted into one box: fill all three.
+    if (other || digits.size() > kMaxDigits[part]) {
+        std::optional<year_month_day> whole = parseUserDate(ui::stdstr(text));
+        if (!whole) whole = parseYmdDigits(digits);
+        if (whole) {
+            setDate(*whole);
+            emit changed();
+            parts_[Day]->setFocus();
+            parts_[Day]->end(false);
+            return;
+        }
+    }
+
+    QLineEdit* e = parts_[part];
+    const QString kept = digits.left(kMaxDigits[part]);
+    if (kept != text) {
+        const QSignalBlocker block(e);  // one changed() below, not two
+        e->setText(kept);
+    }
+    if (kept != text) {
+        updateStyle();
+        emit changed();
+    }
+
+    // Move on once the box is complete, or the user typed a separator.
+    const int n = static_cast<int>(kept.size());
+    bool advance = false;
+    switch (part) {
+    case Year: advance = n == 4 || (trailingSeparator && n == 2); break;
+    case Month: advance = n == 2 || (n == 1 && kept[0] >= u'2') || (trailingSeparator && n == 1); break;
+    case Day: break;
+    }
+    if (advance) {
+        tidy(part);
+        focusPart(static_cast<Part>(part + 1));
+    }
+}
+
+// "26" -> "2026", "1" -> "01" once the user leaves a box.
+void DateField::tidy(Part part)
+{
+    QLineEdit* e = parts_[part];
+    const QString t = e->text().trimmed();
+    bool ok = false;
+    const int v = t.toInt(&ok);
+    if (!ok) {
+        updateStyle();
+        return;
+    }
+    QString tidied = t;
+    if (part == Year && t.size() == 2) tidied = QString::number(2000 + v);
+    else if (part != Year && t.size() == 1 && v >= 1) tidied = QStringLiteral("0") + t;
+    if (tidied != e->text()) e->setText(tidied);  // emits changed()
+    else updateStyle();
+}
+
+// Backspace in an empty box, or the arrow keys at its edge, move between boxes.
+bool DateField::eventFilter(QObject* watched, QEvent* event)
+{
+    if (event->type() == QEvent::KeyPress) {
+        int part = -1;
+        for (int i = 0; i < 3; ++i)
+            if (watched == parts_[i]) part = i;
+        if (part >= 0) {
+            QLineEdit* e = parts_[part];
+            const auto* key = static_cast<QKeyEvent*>(event);
+            const bool atStart = e->cursorPosition() == 0 && !e->hasSelectedText();
+            const bool atEnd = e->cursorPosition() == e->text().size() && !e->hasSelectedText();
+            if (part > 0 && ((key->key() == Qt::Key_Backspace && e->text().isEmpty()) ||
+                             (key->key() == Qt::Key_Left && atStart))) {
+                parts_[part - 1]->setFocus();
+                parts_[part - 1]->end(false);
+                return true;
+            }
+            if (part < 2 && key->key() == Qt::Key_Right && atEnd) {
+                parts_[part + 1]->setFocus();
+                parts_[part + 1]->home(false);
+                return true;
+            }
+        }
+    } else if (event->type() == QEvent::FocusOut) {
+        updateStyle();  // a short year is only flagged once the user leaves it
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void DateField::updateStyle()
 {
-    edit_->setStyleSheet(hasInvalidText() ? QStringLiteral("QLineEdit { border: 1px solid #c42b1c; }")
-                                          : QString());
-    edit_->setToolTip(hasInvalidText() ? tr("Not a date. Try 1/31/2026 or 013126.") : QString());
+    const QString why = problem();
+    const QString red = QStringLiteral("QLineEdit { border: 1px solid #c42b1c; }");
+    for (auto* e : parts_) {
+        e->setStyleSheet(why.isEmpty() ? QString() : red);
+        e->setToolTip(why.isEmpty() ? e->property("baseTip").toString() : why);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -212,6 +399,18 @@ std::optional<DateSpec> DateSpecEditor::value() const
     }
     }
     return std::nullopt;
+}
+
+QString DateSpecEditor::problem() const
+{
+    switch (mode_->currentIndex()) {
+    case Single: return single_->problem();
+    case PeriodMode: {
+        const QString a = periodStart_->problem();
+        return a.isEmpty() ? periodEnd_->problem() : a;
+    }
+    default: return {};
+    }
 }
 
 bool DateSpecEditor::hasInvalidText() const

@@ -1,5 +1,7 @@
 build/
 out/
+dist/
+installer/Output/
 .vs/
 CMakeUserPresets.json
 *.user

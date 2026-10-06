@@ -13,10 +13,11 @@ with optional subfolders by account (full label), by year, or both.
 - [x] `core/`: date modes, filename builder, folder planner, rename plan, rename/undo engine
 - [x] `core/Database`: SQLite storage (cases, people, accounts, rename history)
 - [x] `core/RenameSession`: rename-screen state (rows, carry-forward, refresh, apply, undo last)
-- [x] `tests/`: Catch2 suite (60 tests)
+- [x] `tests/`: Catch2 suite (78 tests)
 - [x] `app/`: Qt 6 main window (cases, people, accounts) and dialogs
 - [x] Rename screen (file table, date modes, sorting, apply/undo) and Rename History
 - [x] PDF preview pane (Qt PDF; optional at build time)
+- [x] Previous account numbers (`(was x1234)` in folder names) and Update File Names (several folders, renamed in place)
 
 ## Building (Windows, Visual Studio 2022)
 
@@ -35,6 +36,25 @@ To build only the core library and tests without Qt: `-DFINRENAMER_BUILD_APP=OFF
 
 Catch2 and SQLiteCpp are used from vcpkg if found (`vcpkg install catch2 sqlitecpp`),
 otherwise CMake downloads them automatically.
+
+## Making an installer (Inno Setup)
+
+One-time: install Inno Setup 6 (https://jrsoftware.org/isinfo.php), then
+reconfigure CMake so it finds it (look for no "Inno Setup not found" message).
+
+Each release:
+
+1. Bump `VERSION` in the top-level `CMakeLists.txt` (`project(FinRenamer VERSION 0.2.0 ...)`).
+2. Switch to the **Release** configuration and build the **installer** target, or:
+
+       cmake --build --preset release --target installer
+
+3. The installer is `installer/Output/FinRenamer-Setup-<version>.exe`.
+
+What happens: the Release build is installed into `dist/` (only the exe, the Qt
+DLLs/plugins and the MSVC runtime DLLs), then `installer/FinRenamer.iss` is compiled.
+The setup installs per-user without admin rights by default, upgrades older
+versions in place (same `AppId`), and never touches `%APPDATA%\FinRenamer`.
 
 ## Database
 

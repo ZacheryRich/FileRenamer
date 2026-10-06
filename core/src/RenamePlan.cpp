@@ -101,7 +101,7 @@ RenamePlan buildPlan(const fs::path& rootIn, const std::vector<PlanInput>& input
 
         const fs::path folder = plan.root / subfolderFor(*input.account, *input.date, options.sort);
         const std::string ext = utf8FromPath(move.source.extension());
-        const std::string stem = buildFilename(*input.account, *input.date, "");
+        const std::string stem = buildFilename(*input.account, *input.date, "", input.number);
 
         // Find the first free name: "stem.pdf", "stem (2).pdf", ...
         fs::path dest;

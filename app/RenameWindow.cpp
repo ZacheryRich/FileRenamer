@@ -33,6 +33,11 @@ namespace {
 
 enum Column { ColFile = 0, ColNewName = 1, ColFolder = 2, ColStatus = 3 };
 
+// Account dropdown entries carry the account id; number dropdown entries carry
+// the number to use ("" = the account's current number).
+constexpr int kAccountIdRole = Qt::UserRole;
+constexpr int kNumberRole = Qt::UserRole;
+
 const QColor kGreen(0x10, 0x7c, 0x10);
 const QColor kRed(0xc4, 0x2b, 0x1c);
 const QColor kGrey(0x70, 0x70, 0x70);
@@ -200,7 +205,16 @@ void RenameWindow::buildUi()
     hint->setStyleSheet("color: palette(placeholder-text);");
 
     auto* form = new QFormLayout;
+    number_ = new QComboBox;
+    number_->setObjectName("number");
+    number_->setToolTip(tr("The account number this statement shows. Older numbers are for "
+                           "statements from before the number changed."));
+    auto* numberRow = new QHBoxLayout;
+    numberRow->addWidget(number_);
+    numberRow->addStretch();
+
     form->addRow(tr("Account:"), accountRow);
+    form->addRow(tr("Number:"), numberRow);
     form->addRow(tr("Date:"), date_);
     form->addRow(QString(), skip_);
 
@@ -279,7 +293,15 @@ void RenameWindow::buildUi()
     connect(table_, &QTableWidget::currentCellChanged, this, &RenameWindow::loadEditor);
     connect(table_, &QTableWidget::cellDoubleClicked, this, &RenameWindow::openPdf);
 
-    connect(account_, &QComboBox::currentIndexChanged, this, &RenameWindow::commitEditor);
+    connect(account_, &QComboBox::currentIndexChanged, this, [this] {
+        if (loadingEditor_) return;
+        fillNumbers(account_->currentData(kAccountIdRole).isValid()
+                        ? std::optional<std::int64_t>(account_->currentData(kAccountIdRole).toLongLong())
+                        : std::nullopt,
+                    {});  // a different account starts on its current number
+        commitEditor();
+    });
+    connect(number_, &QComboBox::currentIndexChanged, this, &RenameWindow::commitEditor);
     connect(date_, &DateSpecEditor::changed, this, &RenameWindow::commitEditor);
     connect(skip_, &QCheckBox::toggled, this, &RenameWindow::commitEditor);
     connect(newAccountBtn_, &QPushButton::clicked, this, &RenameWindow::newAccount);
@@ -352,20 +374,52 @@ void RenameWindow::reloadAccounts()
 {
     std::vector<Account> accounts;
     if (!runGuarded(this, [&] { accounts = db_.loadAccounts(caseId_); })) return;
+    accounts_ = accounts;
 
-    const QVariant keep = account_->currentData();
+    const QVariant keepId = account_->currentData(kAccountIdRole);
+    const std::string keepNumber = stdstr(number_->currentData(kNumberRole).toString());
     {
-        const QSignalBlocker block(account_);
+        const QSignalBlocker blockAccount(account_);
         account_->clear();
         account_->addItem(tr("Choose an account..."));
-        for (const Account& a : accounts) {
+        for (const Account& a : accounts_) {
             account_->addItem(qstr(accountLabel(a)), QVariant::fromValue<qlonglong>(a.id));
             account_->setItemData(account_->count() - 1, qstr(a.institution), Qt::ToolTipRole);
         }
-        const int index = account_->findData(keep);
+        const int index = keepId.isValid() ? accountIndex(keepId.toLongLong()) : 0;
         account_->setCurrentIndex(index >= 0 ? index : 0);
     }
+    fillNumbers(keepId.isValid() ? std::optional<std::int64_t>(keepId.toLongLong()) : std::nullopt,
+                keepNumber);
     if (session_) session_->setAccounts(std::move(accounts));
+}
+
+int RenameWindow::accountIndex(std::optional<std::int64_t> id) const
+{
+    if (!id) return 0;
+    for (int i = 1; i < account_->count(); ++i)
+        if (account_->itemData(i, kAccountIdRole).toLongLong() == *id) return i;
+    return -1;
+}
+
+void RenameWindow::fillNumbers(std::optional<std::int64_t> accountId, const std::string& select)
+{
+    const QSignalBlocker block(number_);
+    number_->clear();
+
+    const Account* account = nullptr;
+    for (const Account& a : accounts_)
+        if (accountId && a.id == *accountId) account = &a;
+
+    if (account) {
+        // Newest first: the current number, then the older ones.
+        number_->addItem(tr("%1  (current)").arg(qstr(account->lastFour)), QString());
+        for (const auto& n : account->previousLastFour) number_->addItem(qstr(n), qstr(n));
+        const int index = number_->findData(qstr(select), kNumberRole);
+        number_->setCurrentIndex(index >= 0 ? index : 0);
+    }
+    // Only worth choosing when the account has had more than one number.
+    number_->setEnabled(account_->isEnabled() && number_->count() > 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -437,7 +491,7 @@ void RenameWindow::updatePreview()
         if (!name.isEmpty() && move.status != MoveStatus::Collision && move.status != MoveStatus::Error)
             text += QStringLiteral("\n") + name;
         if (date_->hasInvalidText() && !row.done)
-            text = tr("The date isn't recognized. Try 1/31/2026 or 013126.");
+            text = date_->problem();
         rowStatus_->setText(text);
         rowStatus_->setStyleSheet(status.color == kRed || date_->hasInvalidText()
                                       ? QStringLiteral("color: #c42b1c;")
@@ -514,6 +568,7 @@ void RenameWindow::loadEditor()
         pdf_->clear();
         for (QWidget* w : std::initializer_list<QWidget*>{account_, newAccountBtn_, date_, skip_, openBtn_, nextBtn_})
             w->setEnabled(false);
+        fillNumbers(std::nullopt, {});
         loadingEditor_ = false;
         return;
     }
@@ -523,7 +578,7 @@ void RenameWindow::loadEditor()
     fileLabel_->setToolTip(QDir::toNativeSeparators(qpath(row.path)));
     pdf_->showFile(qpath(row.path));
 
-    const int index = row.accountId ? account_->findData(QVariant::fromValue<qlonglong>(*row.accountId)) : 0;
+    const int index = accountIndex(row.accountId);
     account_->setCurrentIndex(index >= 0 ? index : 0);
     date_->setValue(row.date);
     skip_->setChecked(row.skip);
@@ -532,6 +587,7 @@ void RenameWindow::loadEditor()
     skip_->setEnabled(editable);
     for (QWidget* w : std::initializer_list<QWidget*>{account_, newAccountBtn_, date_})
         w->setEnabled(editable && !row.skip);
+    fillNumbers(row.accountId, row.number);
     openBtn_->setEnabled(true);
     nextBtn_->setEnabled(true);
 
@@ -547,14 +603,16 @@ void RenameWindow::commitEditor()
     SessionRow& row = session_->row(*cur);
     if (row.done) return;
 
-    const QVariant id = account_->currentData();
+    const QVariant id = account_->currentData(kAccountIdRole);
     row.accountId = id.isValid() ? std::optional<std::int64_t>(id.toLongLong()) : std::nullopt;
+    row.number = row.accountId ? stdstr(number_->currentData(kNumberRole).toString()) : std::string();
     row.date = date_->value();
     row.skip = skip_->isChecked();
     row.failure.clear();
 
     for (QWidget* w : std::initializer_list<QWidget*>{account_, newAccountBtn_, date_})
         w->setEnabled(!row.skip);
+    number_->setEnabled(!row.skip && number_->count() > 1);
     updatePreview();
 }
 
@@ -583,7 +641,7 @@ void RenameWindow::newAccount()
     if (dialog.exec() != QDialog::Accepted) return;
 
     reloadAccounts();
-    const int index = account_->findData(QVariant::fromValue<qlonglong>(dialog.savedAccountId()));
+    const int index = accountIndex(dialog.savedAccountId());
     if (index >= 0) account_->setCurrentIndex(index);  // commits to the current row
 }
 

@@ -42,6 +42,11 @@ struct UndoResult {
 // the others. Never overwrites an existing file.
 ExecuteResult execute(const RenamePlan& plan);
 
+// After a batch that moved files OUT of folders (the name fixer renaming an
+// account folder), removes the source folders that are now empty, up to but
+// not including the batch's root. undo() recreates them as needed.
+std::size_t removeEmptiedFolders(const BatchRecord& record);
+
 // Moves files back and deletes folders this batch created, but only if they
 // are empty. Files that were moved or renamed since are reported, not touched.
 UndoResult undo(const BatchRecord& record);

@@ -64,3 +64,24 @@ TEST_CASE("Account validation")
     a.owners.clear();
     CHECK_FALSE(validateAccount(a));  // owners are optional
 }
+
+TEST_CASE("Previous numbers: folder shows them, file names don't")
+{
+    Account a = testing::chaseJoint();
+    a.accountType = "Credit Card";
+    a.lastFour = "9012";
+    a.previousLastFour = {"5678", "1234"};  // newest first
+    a.owners = {"H"};
+
+    CHECK(accountLabel(a) == "Chase Credit Card 9012 (H)");
+    CHECK(accountLabel(a, "1234") == "Chase Credit Card 1234 (H)");
+    CHECK(accountFolderLabel(a) == "Chase Credit Card 9012 (was x5678, x1234) (H)");
+    CHECK(buildFilename(a, Quarter{2024, 2}, ".pdf", "5678") ==
+          "2024.Q2 Chase Credit Card 5678 (H).pdf");
+
+    a.previousLastFour = {"1234"};
+    CHECK(accountFolderLabel(a) == "Chase Credit Card 9012 (was x1234) (H)");
+
+    a.previousLastFour.clear();
+    CHECK(accountFolderLabel(a) == accountLabel(a));  // unchanged when there are none
+}

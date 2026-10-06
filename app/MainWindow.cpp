@@ -26,7 +26,9 @@
 #include "HistoryDialog.h"
 #include "PersonDialog.h"
 #include "RenameWindow.h"
+#include "UpdateNamesDialog.h"
 #include "QtHelpers.h"
+#include "finrenamer/FilenameBuilder.h"
 
 using namespace finrenamer;
 using namespace ui;
@@ -146,7 +148,13 @@ void MainWindow::buildUi()
     titles->addWidget(caseTitle_);
     titles->addWidget(caseNotes_);
     header->addLayout(titles, 1);
-    header->addWidget(renameFilesBtn_, 0, Qt::AlignTop);
+    updateNamesBtn_ = new QPushButton(tr("Update File Names..."));
+    updateNamesBtn_->setToolTip(tr("Find files and folders still using an account's old name "
+                                   "(after an edit) and update them"));
+    auto* actions = new QVBoxLayout;
+    actions->addWidget(renameFilesBtn_);
+    actions->addWidget(updateNamesBtn_);
+    header->addLayout(actions);
 
     // People
     peopleTable_ = makeTable({tr("Name"), tr("In filenames")});
@@ -203,6 +211,7 @@ void MainWindow::buildUi()
     connect(caseList_, &QListWidget::itemDoubleClicked, this, &MainWindow::editCase);
     connect(newCaseBtn, &QPushButton::clicked, this, &MainWindow::newCase);
     connect(renameFilesBtn_, &QPushButton::clicked, this, &MainWindow::renameFiles);
+    connect(updateNamesBtn_, &QPushButton::clicked, this, &MainWindow::updateFileNames);
     connect(editCaseBtn_, &QPushButton::clicked, this, &MainWindow::editCase);
     connect(deleteCaseBtn_, &QPushButton::clicked, this, &MainWindow::deleteCase);
 
@@ -343,7 +352,13 @@ void MainWindow::reloadAccounts(std::optional<std::int64_t> select)
                 a.institutionDisplay == a.institution
                     ? qstr(a.institution)
                     : QStringLiteral("%1 (%2)").arg(qstr(a.institution), qstr(a.institutionDisplay));
-            const QStringList cells{institution, qstr(a.accountType), qstr(a.lastFour),
+            QString number = qstr(a.lastFour);
+            if (!a.previousLastFour.empty()) {
+                QStringList was;
+                for (const auto& n : a.previousLastFour) was << qstr(n);
+                number += tr(" (was %1)").arg(was.join(QStringLiteral(", ")));
+            }
+            const QStringList cells{institution, qstr(a.accountType), number,
                                     owners.join(QStringLiteral("; "))};
             for (int col = 0; col < cells.size(); ++col) {
                 auto* item = new QTableWidgetItem(cells[col]);
@@ -359,6 +374,7 @@ void MainWindow::updateButtons()
 {
     const bool hasCase = currentCaseId().has_value();
     renameFilesBtn_->setEnabled(hasCase);
+    updateNamesBtn_->setEnabled(hasCase);
     editCaseBtn_->setEnabled(hasCase);
     deleteCaseBtn_->setEnabled(hasCase);
 
@@ -470,11 +486,13 @@ void MainWindow::editPerson()
     if (dialog.exec() != QDialog::Accepted) return;
 
     // Changing the display name updates every account this person owns.
+    const auto before = currentNames();
     if (runGuarded(this, [&] {
             db_.updatePerson(*id, stdstr(dialog.fullName()), stdstr(dialog.displayName()));
         })) {
         reloadPeople();
         reloadAccounts();
+        offerNameUpdate(before);
     }
 }
 
@@ -518,11 +536,13 @@ void MainWindow::editAccount()
     std::optional<AccountRecord> record;
     if (!runGuarded(this, [&] { record = db_.getAccount(*accountId); }) || !record) return;
 
+    const auto before = currentNames();
     AccountDialog dialog(db_, *caseId, record, this);
     const bool saved = dialog.exec() == QDialog::Accepted;
     if (dialog.addedPeople()) reloadPeople();
     if (saved) reloadAccounts(*accountId);
     updateButtons();
+    if (saved) offerNameUpdate(before);
 }
 
 void MainWindow::deleteAccount()
@@ -560,4 +580,45 @@ void MainWindow::renameFiles()
     reloadPeople();
     reloadAccounts();
     updateButtons();
+}
+
+// ---------------------------------------------------------------------------
+// Updating names after edits
+
+// Every file label and folder name this case's accounts produce right now.
+std::set<std::string> MainWindow::currentNames()
+{
+    std::set<std::string> names;
+    const auto caseId = currentCaseId();
+    if (!caseId) return names;
+    runGuarded(this, [&] {
+        for (const Account& a : db_.loadAccounts(*caseId)) {
+            names.insert("file:" + accountLabel(a));
+            for (const auto& n : a.previousLastFour) names.insert("file:" + accountLabel(a, n));
+            names.insert("folder:" + accountFolderLabel(a));
+        }
+    });
+    return names;
+}
+
+void MainWindow::offerNameUpdate(const std::set<std::string>& namesBefore)
+{
+    if (currentNames() == namesBefore) return;  // nothing that appears in names changed
+    const auto answer = QMessageBox::question(
+        this, tr("Update File Names"),
+        tr("This changes how the account's files and folders are named. Files and folders "
+           "you've already renamed still use the old version.\n\n"
+           "Update them now? You'll see every change before anything is renamed."),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (answer == QMessageBox::Yes) updateFileNames();
+}
+
+void MainWindow::updateFileNames()
+{
+    const auto caseId = currentCaseId();
+    if (!caseId) return;
+    UpdateNamesDialog dialog(db_, *caseId, this);
+    // Folders used for this case before are remembered; ask for one the first time.
+    if (!dialog.hasFolders() && !dialog.promptForFolder()) return;
+    dialog.exec();
 }

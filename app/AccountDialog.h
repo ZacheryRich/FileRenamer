@@ -43,6 +43,14 @@ private:
     void autofillInstitutionDisplay();
     finrenamer::Account currentAccount() const;
 
+    // Account numbers list: newest first, the top one is current.
+    std::vector<std::string> numbers() const;
+    finrenamer::Database::NumberCorrections numberCorrections() const;
+    void addNumber();
+    void removeNumber();
+    void moveNumber(int delta);
+    void styleNumbers();
+
     finrenamer::Database& db_;
     std::int64_t caseId_;
     std::optional<finrenamer::AccountRecord> existing_;
@@ -54,7 +62,10 @@ private:
     QHash<QString, QString> knownDisplayNames_;  // lowercased institution -> last display name used
     bool displayEditedByUser_ = false;           // stop autofilling once the user types their own
     QLineEdit* type_ = nullptr;
-    QLineEdit* lastFour_ = nullptr;
+    QListWidget* numbers_ = nullptr;  // each item remembers its saved text, to spot corrections
+    QPushButton* removeNumberBtn_ = nullptr;
+    QPushButton* numberUpBtn_ = nullptr;
+    QPushButton* numberDownBtn_ = nullptr;
     QListWidget* owners_ = nullptr;
     QComboBox* peopleChoice_ = nullptr;
     QPushButton* addOwnerBtn_ = nullptr;

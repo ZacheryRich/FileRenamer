@@ -17,7 +17,8 @@ struct PlanInput {
     std::filesystem::path source;
     std::optional<Account> account;
     std::optional<DateSpec> date;
-    bool skip = false;  // leave this file exactly as it is
+    bool skip = false;   // leave this file exactly as it is
+    std::string number;  // one of the account's previous numbers; empty = current
 };
 
 enum class CollisionPolicy {

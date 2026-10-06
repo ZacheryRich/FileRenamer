@@ -247,3 +247,33 @@ TEST_CASE("undoLast restores files and makes their rows editable again")
     CHECK_FALSE(s.row(0).done);
     CHECK_FALSE(s.undoLast());
 }
+
+TEST_CASE("A file can use an old number; the folder still shows all numbers")
+{
+    testing::TempDir dir;
+    dir.touch("old.pdf");
+    dir.touch("new.pdf");
+    Account card = testing::fidelitySingle();
+    card.lastFour = "9012";
+    card.previousLastFour = {"5678"};
+    RenameSession s(dir.path(), {card});
+
+    s.row(0).accountId = card.id;   // new.pdf
+    s.row(0).date = SingleDate{makeDate(2026, 1, 31)};
+    s.row(1).accountId = card.id;   // old.pdf
+    s.row(1).number = "5678";
+    s.row(1).date = SingleDate{makeDate(2023, 1, 31)};
+
+    PlanOptions opts;
+    opts.sort.byAccount = true;
+    const auto preview = s.preview(opts);
+    const fs::path folder = s.root() / "Fidelity Brokerage 9012 (was x5678) (Jane Smith)";
+    CHECK(preview[0].destination == folder / "2026.01.31 Fidelity Brokerage 9012 (Jane Smith).pdf");
+    CHECK(preview[1].destination == folder / "2023.01.31 Fidelity Brokerage 5678 (Jane Smith).pdf");
+
+    // Carry-forward keeps the chosen number.
+    dir.touch("z later.pdf");
+    s.refresh();
+    REQUIRE(s.carryForward(1, 2));
+    CHECK(s.row(2).number == "5678");
+}

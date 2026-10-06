@@ -37,3 +37,13 @@ TEST_CASE("Year folders for periods use the end year")
     const DateSpec p = Period{makeDate(2025, 12, 15), makeDate(2026, 1, 14)};
     CHECK(subfolderFor(testing::chaseJoint(), p, opts) == fs::path("2026"));
 }
+
+TEST_CASE("Account folders list previous numbers")
+{
+    Account a = testing::fidelitySingle();
+    a.previousLastFour = {"1111"};
+    SortOptions opts;
+    opts.byAccount = true;
+    CHECK(subfolderFor(a, Quarter{2026, 1}, opts) ==
+          fs::path("Fidelity Brokerage 5678 (was x1111) (Jane Smith)"));
+}

@@ -10,7 +10,7 @@ namespace finrenamer {
 std::filesystem::path subfolderFor(const Account& account, const DateSpec& date,
                                    const SortOptions& options)
 {
-    const std::filesystem::path accountDir = pathFromUtf8(accountLabel(account));
+    const std::filesystem::path accountDir = pathFromUtf8(accountFolderLabel(account));
     const std::filesystem::path yearDir = pathFromUtf8(std::to_string(filingYear(date)));
 
     if (options.byAccount && options.byYear) {

@@ -35,13 +35,13 @@ TEST_CASE("A new database is created at the current schema version")
     const fs::path file = dir.path() / "finrenamer.db";
     {
         Database db(file);
-        CHECK(db.schemaVersion() == 3);
+        CHECK(db.schemaVersion() == 4);
         db.createCase({0, "Persisted", ""});
     }
     CHECK(fs::exists(file));
 
     Database reopened(file);  // reopening must not re-run migrations
-    CHECK(reopened.schemaVersion() == 3);
+    CHECK(reopened.schemaVersion() == 4);
     REQUIRE(reopened.listCases().size() == 1);
     CHECK(reopened.listCases()[0].clientName == "Persisted");
 }
@@ -343,7 +343,7 @@ TEST_CASE("A version 1 database is upgraded and keeps its data")
     }
 
     Database db(file);
-    CHECK(db.schemaVersion() == 3);
+    CHECK(db.schemaVersion() == 4);
     const auto people = db.listPeople(1);
     REQUIRE(people.size() == 1);
     CHECK(people[0].displayName == "José Núñez");
@@ -393,4 +393,59 @@ TEST_CASE("Institution suggestions remember the latest abbreviation for each ban
     CHECK(names[1].institution == "bank of america");
     CHECK(names[1].displayName == "BofA");
     CHECK(names[2].displayName == "Charles Schwab");
+}
+
+TEST_CASE("Previous numbers are stored, validated and loaded")
+{
+    SmithCase s;
+    const auto id = s.db.createAccount({0, s.caseId, "Chase", "", "Credit Card", "9012", {s.john}, {"5678", "1234"}});
+    CHECK(s.db.getAccount(id)->previousLastFour == std::vector<std::string>{"5678", "1234"});
+    CHECK(s.db.loadAccounts(s.caseId)[0].previousLastFour == std::vector<std::string>{"5678", "1234"});
+    CHECK(accountFolderLabel(s.db.loadAccounts(s.caseId)[0]) ==
+          "Chase Credit Card 9012 (was x5678, x1234) (John Smith)");
+
+    CHECK_THROWS_WITH(s.db.updateAccount({id, s.caseId, "Chase", "", "Credit Card", "9012", {}, {"9012"}}),
+                      ContainsSubstring("more than once"));
+    CHECK_THROWS_AS(s.db.updateAccount({id, s.caseId, "Chase", "", "Credit Card", "9012", {}, {"1234", "1234"}}),
+                    DatabaseError);
+    CHECK_THROWS_AS(s.db.updateAccount({id, s.caseId, "Chase", "", "Credit Card", "9012", {}, {" "}}),
+                    DatabaseError);
+
+    s.db.updateAccount({id, s.caseId, "Chase", "", "Credit Card", "9012", {s.john}, {}});
+    CHECK(s.db.getAccount(id)->previousLastFour.empty());
+}
+
+TEST_CASE("Edits that change names are remembered as old names")
+{
+    SmithCase s;
+    const auto id = s.db.createAccount({0, s.caseId, "Chsae", "", "Checking", "1234", {s.john}});
+    CHECK(s.db.oldAccountNames(s.caseId).empty());
+
+    // Fix the typo.
+    s.db.updateAccount({id, s.caseId, "Chase", "", "Checking", "1234", {s.john}});
+    auto old = s.db.oldAccountNames(s.caseId);
+    REQUIRE(old.size() == 2);  // the file label and the folder name it had
+    CHECK(old[0].name == "Chsae Checking 1234 (John Smith)");
+    CHECK(old[0].lastFour == "1234");
+
+    // Card replaced: 1234 becomes a previous number. File names for 1234 stay
+    // valid, so only the folder name is new history.
+    s.db.updateAccount({id, s.caseId, "Chase", "", "Checking", "5678", {s.john}, {"1234"}});
+    old = s.db.oldAccountNames(s.caseId);
+    REQUIRE(old.size() == 3);
+    CHECK(old[2].isFolder);
+    CHECK(old[2].name == "Chase Checking 1234 (John Smith)");
+
+    // A person's new display name changes the names of their accounts.
+    s.db.updatePerson(s.john, "John Smith", "H");
+    old = s.db.oldAccountNames(s.caseId);
+    bool found = false;
+    for (const auto& o : old)
+        if (!o.isFolder && o.name == "Chase Checking 5678 (John Smith)") found = true;
+    CHECK(found);
+
+    // Saving without changes records nothing new.
+    const auto count = s.db.oldAccountNames(s.caseId).size();
+    s.db.updateAccount(*s.db.getAccount(id));
+    CHECK(s.db.oldAccountNames(s.caseId).size() == count);
 }

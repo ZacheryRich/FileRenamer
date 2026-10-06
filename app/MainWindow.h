@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <optional>
+#include <set>
+#include <string>
 
 #include "finrenamer/Database.h"
 
@@ -48,6 +50,9 @@ private:
     void editAccount();
     void deleteAccount();
     void renameFiles();
+    void updateFileNames();
+    std::set<std::string> currentNames();
+    void offerNameUpdate(const std::set<std::string>& namesBefore);
 
     finrenamer::Database& db_;
     QString dataFolder_;
@@ -63,6 +68,7 @@ private:
     QLabel* caseTitle_ = nullptr;
     QLabel* caseNotes_ = nullptr;
     QPushButton* renameFilesBtn_ = nullptr;
+    QPushButton* updateNamesBtn_ = nullptr;
 
     QTableWidget* peopleTable_ = nullptr;
     QPushButton* editPersonBtn_ = nullptr;

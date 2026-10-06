@@ -102,6 +102,22 @@ ExecuteResult execute(const RenamePlan& plan)
     return result;
 }
 
+std::size_t removeEmptiedFolders(const BatchRecord& record)
+{
+    std::size_t removed = 0;
+    std::error_code ec;
+    for (const ExecutedMove& m : record.moves) {
+        for (fs::path dir = m.from.parent_path();
+             !dir.empty() && dir != record.root && dir != dir.parent_path();
+             dir = dir.parent_path()) {
+            if (!fs::is_directory(dir, ec) || !fs::is_empty(dir, ec)) break;
+            if (!fs::remove(dir, ec)) break;
+            ++removed;
+        }
+    }
+    return removed;
+}
+
 UndoResult undo(const BatchRecord& record)
 {
     UndoResult result;
@@ -116,6 +132,9 @@ UndoResult undo(const BatchRecord& record)
             result.failures.push_back({it->from, "Another file now has the original name."});
             continue;
         }
+        // The original folder may have been removed after it was emptied
+        // (removeEmptiedFolders); bring it back.
+        fs::create_directories(it->from.parent_path(), ec);
         fs::rename(it->to, it->from, ec);
         if (ec) {
             result.failures.push_back({it->to, ec.message()});

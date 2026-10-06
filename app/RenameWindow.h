@@ -41,6 +41,8 @@ private:
     void buildUi();
     void refreshFolder();
     void reloadAccounts();
+    int accountIndex(std::optional<std::int64_t> id) const;
+    void fillNumbers(std::optional<std::int64_t> accountId, const std::string& select);
 
     void rebuildTable();
     void updatePreview();
@@ -78,6 +80,8 @@ private:
     QGroupBox* editorBox_ = nullptr;
     QLabel* fileLabel_ = nullptr;
     QComboBox* account_ = nullptr;
+    QComboBox* number_ = nullptr;  // the chosen account's numbers; "" data = current
+    std::vector<finrenamer::Account> accounts_;
     QPushButton* newAccountBtn_ = nullptr;
     DateSpecEditor* date_ = nullptr;
     QCheckBox* skip_ = nullptr;

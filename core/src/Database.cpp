@@ -14,7 +14,7 @@ namespace finrenamer {
 
 namespace {
 
-constexpr int kSchemaVersion = 3;
+constexpr int kSchemaVersion = 4;
 
 // Each entry upgrades the schema by one version. Never edit a shipped entry;
 // add a new one instead, so existing databases upgrade in place.
@@ -89,6 +89,26 @@ const char* const kMigrations[] = {
     R"sql(
     ALTER TABLE accounts ADD COLUMN institution_display TEXT NOT NULL DEFAULT '';
     UPDATE accounts SET institution_display = institution;
+    )sql",
+
+    // Version 4: previous numbers of an account (replaced cards), and the names
+    // accounts had before edits, so old file and folder names can be found.
+    R"sql(
+    CREATE TABLE account_previous_numbers (
+        account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        last_four  TEXT NOT NULL COLLATE NOCASE,
+        position   INTEGER NOT NULL,
+        PRIMARY KEY (account_id, last_four)
+    );
+
+    CREATE TABLE account_name_history (
+        account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        is_folder   INTEGER NOT NULL,
+        name        TEXT NOT NULL COLLATE NOCASE,
+        last_four   TEXT NOT NULL DEFAULT '',
+        recorded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        PRIMARY KEY (account_id, is_folder, name)
+    );
     )sql",
 };
 
@@ -210,6 +230,14 @@ struct Database::Impl {
         probe.lastFour = a.lastFour;
         if (auto err = validateAccount(probe)) throw DatabaseError(*err);
 
+        std::set<std::string> numbers{caseFoldKey(pathFromUtf8(trimmed(a.lastFour)))};
+        for (const auto& n : a.previousLastFour) {
+            const std::string clean = trimmed(n);
+            if (clean.empty()) throw DatabaseError("A previous number is blank.");
+            if (!numbers.insert(caseFoldKey(pathFromUtf8(clean))).second)
+                throw DatabaseError("The number " + clean + " is listed more than once.");
+        }
+
         std::set<std::int64_t> seen;
         for (const auto id : a.ownerIds) {
             if (!seen.insert(id).second)
@@ -249,6 +277,108 @@ struct Database::Impl {
         std::vector<std::int64_t> ids;
         while (q.executeStep()) ids.push_back(q.getColumn(0).getInt64());
         return ids;
+    }
+
+    void writePreviousNumbers(std::int64_t accountId, const std::vector<std::string>& numbers)
+    {
+        SQLite::Statement del(db, "DELETE FROM account_previous_numbers WHERE account_id = ?");
+        del.bind(1, accountId);
+        del.exec();
+
+        SQLite::Statement ins(db,
+            "INSERT INTO account_previous_numbers (account_id, last_four, position) VALUES (?, ?, ?)");
+        int position = 0;
+        for (const auto& n : numbers) {
+            ins.bind(1, accountId);
+            ins.bind(2, trimmed(n));
+            ins.bind(3, position++);
+            ins.exec();
+            ins.reset();
+        }
+    }
+
+    std::vector<std::string> previousOf(std::int64_t accountId)
+    {
+        SQLite::Statement q(db,
+            "SELECT last_four FROM account_previous_numbers WHERE account_id = ? ORDER BY position");
+        q.bind(1, accountId);
+        std::vector<std::string> out;
+        while (q.executeStep()) out.push_back(q.getColumn(0).getString());
+        return out;
+    }
+
+    // The renaming form of an account: owners' display names, previous numbers.
+    Account toAccount(const AccountRecord& r)
+    {
+        Account a;
+        a.id = r.id;
+        a.caseId = r.caseId;
+        a.institution = r.institution;
+        a.institutionDisplay = r.institutionDisplay;
+        a.accountType = r.accountType;
+        a.lastFour = r.lastFour;
+        a.previousLastFour = r.previousLastFour;
+
+        SQLite::Statement names(db, R"sql(
+            SELECT p.display_name FROM account_owners o JOIN people p ON p.id = o.person_id
+            WHERE o.account_id = ? ORDER BY o.position)sql");
+        names.bind(1, r.id);
+        while (names.executeStep()) a.owners.push_back(names.getColumn(0).getString());
+        return a;
+    }
+
+    std::optional<Account> loadAccount(std::int64_t accountId)
+    {
+        SQLite::Statement q(db,
+            "SELECT id, case_id, institution, account_type, last_four, institution_display"
+            " FROM accounts WHERE id = ?");
+        q.bind(1, accountId);
+        if (!q.executeStep()) return std::nullopt;
+        AccountRecord r = readAccountRow(q);
+        r.previousLastFour = previousOf(r.id);
+        return toAccount(r);
+    }
+
+    // Remembers every file/folder name `before` produced that `after` no longer
+    // produces, so files named the old way can be found and fixed later.
+    void recordOldNames(const Account& before, const Account& after,
+                        const Database::NumberCorrections& corrections = {})
+    {
+        // The number files with an old name should use from now on: the corrected
+        // text if this edit fixed a typo in it, otherwise the same number (the
+        // name fixer falls back to the current number if the account no longer has it).
+        auto targetNumber = [&](const std::string& n) {
+            for (const auto& [from, to] : corrections)
+                if (caseFoldKey(pathFromUtf8(from)) == caseFoldKey(pathFromUtf8(n))) return to;
+            return n;
+        };
+
+        auto fileNames = [](const Account& a) {
+            std::vector<std::pair<std::string, std::string>> out{{accountLabel(a), a.lastFour}};
+            for (const auto& n : a.previousLastFour) out.push_back({accountLabel(a, n), n});
+            return out;
+        };
+        std::set<std::string> current;
+        for (const auto& [name, number] : fileNames(after)) current.insert(caseFoldKey(pathFromUtf8(name)));
+
+        SQLite::Statement ins(db,
+            "INSERT OR IGNORE INTO account_name_history (account_id, is_folder, name, last_four)"
+            " VALUES (?, ?, ?, ?)");
+        auto record = [&](bool folder, const std::string& name, const std::string& number) {
+            ins.bind(1, before.id);
+            ins.bind(2, folder ? 1 : 0);
+            ins.bind(3, name);
+            ins.bind(4, number);
+            ins.exec();
+            ins.reset();
+        };
+
+        for (const auto& [name, number] : fileNames(before))
+            if (!current.count(caseFoldKey(pathFromUtf8(name)))) record(false, name, targetNumber(number));
+
+        const std::string oldFolder = accountFolderLabel(before);
+        if (caseFoldKey(pathFromUtf8(oldFolder)) != caseFoldKey(pathFromUtf8(accountFolderLabel(after))))
+            record(true, oldFolder, {});
     }
 
     static AccountRecord readAccountRow(SQLite::Statement& q)
@@ -374,11 +504,23 @@ void Database::updatePerson(std::int64_t personId, const std::string& fullName,
     if (!find.executeStep()) throw DatabaseError("That person no longer exists.");
     impl_->requireUniquePerson(find.getColumn(0).getInt64(), full, shown, personId);
 
+    SQLite::Transaction tx(impl_->db);
+
+    // A new display name changes the names of every account this person owns.
+    std::vector<Account> before;
+    SQLite::Statement owned(impl_->db, "SELECT account_id FROM account_owners WHERE person_id = ?");
+    owned.bind(1, personId);
+    while (owned.executeStep())
+        if (auto acct = impl_->loadAccount(owned.getColumn(0).getInt64())) before.push_back(*acct);
+
     SQLite::Statement q(impl_->db, "UPDATE people SET full_name = ?, display_name = ? WHERE id = ?");
     q.bind(1, full);
     q.bind(2, shown);
     q.bind(3, personId);
     q.exec();
+
+    for (const Account& old : before) impl_->recordOldNames(old, *impl_->loadAccount(old.id));
+    tx.commit();
 }
 
 void Database::deletePerson(std::int64_t personId)
@@ -436,11 +578,12 @@ std::int64_t Database::createAccount(const AccountRecord& a)
     q.exec();
     const std::int64_t id = impl_->db.getLastInsertRowid();
     impl_->writeOwners(id, a.ownerIds);
+    impl_->writePreviousNumbers(id, a.previousLastFour);
     tx.commit();
     return id;
 }
 
-void Database::updateAccount(const AccountRecord& a)
+void Database::updateAccount(const AccountRecord& a, const NumberCorrections& numberCorrections)
 {
     const auto existing = getAccount(a.id);
     if (!existing) throw DatabaseError("That account no longer exists.");
@@ -450,6 +593,7 @@ void Database::updateAccount(const AccountRecord& a)
     impl_->validate(checked);
 
     SQLite::Transaction tx(impl_->db);
+    const std::optional<Account> before = impl_->loadAccount(a.id);
     SQLite::Statement q(impl_->db,
         "UPDATE accounts SET institution = ?, account_type = ?, last_four = ?, institution_display = ?"
         " WHERE id = ?");
@@ -460,6 +604,8 @@ void Database::updateAccount(const AccountRecord& a)
     q.bind(5, a.id);
     q.exec();
     impl_->writeOwners(a.id, a.ownerIds);
+    impl_->writePreviousNumbers(a.id, a.previousLastFour);
+    if (before) impl_->recordOldNames(*before, *impl_->loadAccount(a.id), numberCorrections);
     tx.commit();
 }
 
@@ -479,6 +625,7 @@ std::optional<AccountRecord> Database::getAccount(std::int64_t accountId) const
     if (!q.executeStep()) return std::nullopt;
     AccountRecord a = Impl::readAccountRow(q);
     a.ownerIds = impl_->ownersOf(a.id);
+    a.previousLastFour = impl_->previousOf(a.id);
     return a;
 }
 
@@ -491,32 +638,32 @@ std::vector<AccountRecord> Database::listAccountRecords(std::int64_t caseId) con
     q.bind(1, caseId);
     std::vector<AccountRecord> out;
     while (q.executeStep()) out.push_back(Impl::readAccountRow(q));
-    for (auto& a : out) a.ownerIds = impl_->ownersOf(a.id);
+    for (auto& a : out) {
+        a.ownerIds = impl_->ownersOf(a.id);
+        a.previousLastFour = impl_->previousOf(a.id);
+    }
     return out;
 }
 
 std::vector<Account> Database::loadAccounts(std::int64_t caseId) const
 {
-    SQLite::Statement names(impl_->db, R"sql(
-        SELECT p.display_name FROM account_owners o JOIN people p ON p.id = o.person_id
-        WHERE o.account_id = ? ORDER BY o.position)sql");
-
     std::vector<Account> out;
-    for (const AccountRecord& r : listAccountRecords(caseId)) {
-        Account a;
-        a.id = r.id;
-        a.caseId = r.caseId;
-        a.institution = r.institution;
-        a.institutionDisplay = r.institutionDisplay;
-        a.accountType = r.accountType;
-        a.lastFour = r.lastFour;
+    for (const AccountRecord& r : listAccountRecords(caseId)) out.push_back(impl_->toAccount(r));
+    return out;
+}
 
-        names.bind(1, r.id);
-        while (names.executeStep()) a.owners.push_back(names.getColumn(0).getString());
-        names.reset();
-
-        out.push_back(std::move(a));
-    }
+std::vector<OldAccountName> Database::oldAccountNames(std::int64_t caseId) const
+{
+    SQLite::Statement q(impl_->db, R"sql(
+        SELECT h.account_id, h.is_folder, h.name, h.last_four
+        FROM account_name_history h JOIN accounts a ON a.id = h.account_id
+        WHERE a.case_id = ?
+        ORDER BY h.recorded_at, h.rowid)sql");
+    q.bind(1, caseId);
+    std::vector<OldAccountName> out;
+    while (q.executeStep())
+        out.push_back({q.getColumn(0).getInt64(), q.getColumn(1).getInt() != 0,
+                       q.getColumn(2).getString(), q.getColumn(3).getString()});
     return out;
 }
 
