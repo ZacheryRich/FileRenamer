@@ -24,6 +24,10 @@ inline std::string stdstr(const QString& s) { return s.toStdString(); }
 inline std::filesystem::path toPath(const QString& s) { return finrenamer::pathFromUtf8(s.toStdString()); }
 inline QString qpath(const std::filesystem::path& p) { return QString::fromStdString(finrenamer::utf8FromPath(p)); }
 
+// The name shown to the user (window titles, installer). The internal name,
+// "FinRenamer", stays for the data folder (%APPDATA%\FinRenamer), exe and namespaces.
+inline QString appTitle() { return QStringLiteral("Zach's Litigation Tools"); }
+
 // Small per-user settings (last folder, sort options): %APPDATA%\FinRenamer\settings.ini
 inline QString settingsFile()
 {

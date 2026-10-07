@@ -5,6 +5,13 @@ Read this first. It records what the program does, every decision made so far
 
 ## What it is
 
+**Program name (shown to the user): "Zach's Litigation Tools"** (`ui::appTitle()`:
+window titles, start-screen heading, installer name/shortcuts, setup file
+`ZachsLitigationTools-Setup-x.y.z.exe`). The *internal* name stays **FinRenamer**
+on purpose -- `QApplication::applicationName` (it decides `%APPDATA%\FinRenamer`, so
+changing it would orphan the user's database and settings), the exe/CMake target,
+namespaces and the installer's `AppId`. Don't rename those.
+
 A Windows desktop app (C++20, Qt 6 Widgets) for a user at work who receives bulk
 financial statements as PDFs and has to rename and organize them per client case.
 Everything is local: no network, data stored on the user's own machine.
@@ -178,7 +185,7 @@ sorts into subfolders) → **Undo** if needed.
       Database              SQLite via SQLiteCpp (pimpl; not exposed in headers)
       Utf8Path              pathFromUtf8 / utf8FromPath / utf16Length / caseFoldKey
     app/                    Qt Widgets GUI (static lib finrenamer_ui + FinRenamer.exe)
-      main.cpp              opens the DB in AppData, shows MainWindow
+      main.cpp              opens the DB in AppData, shows HomeWindow
       HomeWindow            start screen: Case List / File Renamer / Deficiency List tiles
       CasePickerDialog      "Choose a Case" (filter list; remembers home/lastCase) for the last two tiles
       MainWindow            the Case List: cases list | people table + accounts table; File menu
@@ -272,7 +279,7 @@ Catch2 3.7.1 (vcpkg if present, else FetchContent from GitHub).
   A post-build `windeployqt` makes `build/app/Debug/FinRenamer.exe` runnable.
 - Tests: Test Explorer, or `ctest --preset debug`.
 - Installer: bump `project(... VERSION x.y.z)`, Release config, build target
-  **installer** → `installer/Output/FinRenamer-Setup-x.y.z.exe`. It installs
+  **installer** → `installer/Output/ZachsLitigationTools-Setup-x.y.z.exe`. It installs
   per-user without admin (`PrivilegesRequired=lowest`), upgrades in place (fixed
   `AppId`), bundles the MSVC runtime DLLs (no vc_redist), never touches AppData.
 

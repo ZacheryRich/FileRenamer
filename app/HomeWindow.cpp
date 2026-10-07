@@ -34,9 +34,9 @@ QPushButton* makeTile(const QString& objectName, const QString& title, const QSt
 HomeWindow::HomeWindow(Database& db, const QString& dataFolder, QWidget* parent)
     : QMainWindow(parent), db_(db), dataFolder_(dataFolder)
 {
-    setWindowTitle(tr("FinRenamer"));
+    setWindowTitle(appTitle());
 
-    auto* heading = new QLabel(tr("FinRenamer"));
+    auto* heading = new QLabel(appTitle());
     QFont big = heading->font();  // same title style as the Case List's case name
     big.setPointSizeF(big.pointSizeF() * 1.5);
     big.setBold(true);

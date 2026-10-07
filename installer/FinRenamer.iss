@@ -1,4 +1,5 @@
-; Inno Setup script for FinRenamer.
+; Inno Setup script for Zach's Litigation Tools (internally still "FinRenamer":
+; same AppId, exe name and data folder, so upgrades keep working).
 ;
 ; Normally built by the CMake "installer" target, which passes the version and
 ; the dist folder. To build by hand instead:
@@ -13,8 +14,8 @@
   #define DistDir "..\dist"
 #endif
 
-#define MyAppName      "FinRenamer"
-#define MyAppPublisher "FinRenamer"
+#define MyAppName      "Zach's Litigation Tools"
+#define MyAppPublisher "Zach"
 #define MyAppExeName   "FinRenamer.exe"
 
 [Setup]
@@ -39,7 +40,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 
-OutputBaseFilename=FinRenamer-Setup-{#MyAppVersion}
+OutputBaseFilename=ZachsLitigationTools-Setup-{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

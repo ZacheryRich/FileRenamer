@@ -85,7 +85,7 @@ QHBoxLayout* buttonRow(std::initializer_list<QPushButton*> buttons)
 MainWindow::MainWindow(Database& db, const QString& dataFolder, QWidget* parent)
     : QMainWindow(parent), db_(db), dataFolder_(dataFolder)
 {
-    setWindowTitle(tr("Case List - FinRenamer"));
+    setWindowTitle(tr("Case List - %1").arg(appTitle()));
     buildUi();
     buildMenus();
     resize(1100, 680);

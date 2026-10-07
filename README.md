@@ -1,4 +1,4 @@
-# FinRenamer
+# Zach's Litigation Tools (FinRenamer)
 
 Renames and sorts client financial statements (PDFs) into the format
 
@@ -51,7 +51,7 @@ Each release:
 
        cmake --build --preset release --target installer
 
-3. The installer is `installer/Output/FinRenamer-Setup-<version>.exe`.
+3. The installer is `installer/Output/ZachsLitigationTools-Setup-<version>.exe`.
 
 What happens: the Release build is installed into `dist/` (only the exe, the Qt
 DLLs/plugins and the MSVC runtime DLLs), then `installer/FinRenamer.iss` is compiled.
