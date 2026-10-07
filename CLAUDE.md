@@ -51,6 +51,24 @@ sorts into subfolders) → **Undo** if needed.
   never show "was". The **account folder** shows the older ones:
   `Chase Credit Card 9012 (was x5678, x1234) (H)`.
 
+- **Combined statements** (one PDF covering several accounts at the same institution):
+  `2026.01.31 Chase Chk x1111, Sav x2222, Chk x3333 (H; W).pdf` -- institution once,
+  then each account's *type as entered* and current number with an `x`, in the
+  order the user set, comma-separated; then the owners. User's choices: types as
+  entered (no separate short type), owners **chosen on the combined statement
+  itself**, its own account folder named like the file label, and combined
+  statements are **saved in the case** (account dialog's "Statement" dropdown:
+  Single account / Combined statement; fixed once saved) and picked from the
+  rename screen's account list like any account. Stored as an `accounts` row with
+  `is_combined = 1` plus `combined_members` (order); `Account::combined` /
+  `AccountRecord::memberIds`. At least two accounts, same institution (any case),
+  same case, no nesting; an account on a statement can't be deleted. The Number
+  dropdown doesn't apply (each account's *current* number is used -- known gap:
+  older combined statements from before a card replacement get the new number).
+  Editing a member account records the statement's old names too
+  (`recordMemberChange`); a member that only got a newer number records just the
+  folder name, as for single accounts.
+
 ## Subfolder sorting
 
 - Optional: by account, by year, or both (order: Account→Year or Year→Account).
@@ -114,6 +132,28 @@ sorts into subfolders) → **Undo** if needed.
   file label of an account (current or previous number) used as a folder name is also
   recognised.
 
+- **Deficiency List** (main window button; `DeficiencyDialog`): searches the case's
+  folders (the same remembered per-case folder list as Update File Names, shared via
+  `CaseFolderList`) for statements *already renamed* by this program and reports which
+  months each account is missing. User's choices: date range **From/To plus a
+  "Through present" option** (range line ends "Present"; present = last *completed*
+  month, i.e. last month); an optional **Opened on / Closed on** date per single
+  account (account dialog; months before the opening month and after the closing
+  month are not expected, those two months themselves are); check boxes **Months
+  found** / **Months missing** (at least one stays on); **no "months expected"**
+  column; **one table per account with one row per year** in the range; title
+  `<Case Name> Deficiency List`, the date range below it. Years in the range before
+  opening/after closing show "2022 (not open)" with dashes. Matching reads each PDF's
+  *name* (`splitStatementName` -> date + label -> `FileLabelIndex.find`), so current
+  labels, previous-number labels, recorded old names and " (n)" copies all count.
+  A single date covers its calendar month, a period every month it touches, a
+  quarter its three months; a combined statement credits every member account.
+  PDFs not named like a statement are listed under "Files Not Matched...". Combined
+  statements aren't listed as tables (their members are). Nothing in the folders
+  is changed. Word output is a hand-written stored zip + WordprocessingML
+  (`DocxWriter.cpp`): no library. Range/options remembered per case in settings.ini
+  under `deficiency/case<id>/...`.
+
 ## Layout of the code
 
     CMakeLists.txt          options FINRENAMER_BUILD_APP / FINRENAMER_BUILD_TESTS
@@ -132,20 +172,27 @@ sorts into subfolders) → **Undo** if needed.
                             undo(record) (recreates removed parent folders)
       RenameSession         rename-screen state: rows, carry-forward, refresh,
                             apply (partial), undoLast
+      FolderSearch, StatementNames   find PDFs in folders; split a statement name into date + label
+      StatementCoverage     scanStatements (months covered per account), analyzeCoverage (per year)
+      DeficiencyReport      buildDeficiencyReport (plain-text model), writeDocx/docxBytes (DocxWriter.cpp)
       Database              SQLite via SQLiteCpp (pimpl; not exposed in headers)
       Utf8Path              pathFromUtf8 / utf8FromPath / utf16Length / caseFoldKey
     app/                    Qt Widgets GUI (static lib finrenamer_ui + FinRenamer.exe)
       main.cpp              opens the DB in AppData, shows MainWindow
-      MainWindow            cases list | people table + accounts table; File menu
+      HomeWindow            start screen: Case List / File Renamer / Deficiency List tiles
+      CasePickerDialog      "Choose a Case" (filter list; remembers home/lastCase) for the last two tiles
+      MainWindow            the Case List: cases list | people table + accounts table; File menu
       CaseDialog, PersonDialog, AccountDialog
       RenameWindow          the rename screen (table + editor left, preview right)
       DateWidgets           DateField (Year/Month/Day boxes + calendar), DateSpecEditor (mode + inputs)
       PdfPreview            QPdfView preview; compiled only with FINRENAMER_HAVE_QTPDF
       HistoryDialog         File > Rename History, undo any batch
+      CaseFolderList        shared per-case folder list (Add/Remove/drag; settings key updateNames/case<id>/folders)
       UpdateNamesDialog     Update File Names: folder list, preview, apply
+      DeficiencyDialog      Deficiency List: range, options, accounts, preview, Save as Word
       QtHelpers.h           qstr/stdstr/toPath/qpath, settingsFile, personLabel,
                             disconnectChildren, runGuarded
-    tests/                  Catch2 v3 (78 tests): core + Database + RenameSession + NameFixer
+    tests/                  Catch2 v3 (98 tests): core + Database + RenameSession + NameFixer
     installer/FinRenamer.iss  Inno Setup script
 
 Dependencies: Qt 6.12 (Widgets, optional Pdf/PdfWidgets), SQLiteCpp 3.3.3 and
@@ -162,17 +209,19 @@ Catch2 3.7.1 (vcpkg if present, else FetchContent from GitHub).
 - **Schema changes**: append a new entry to `kMigrations` in `Database.cpp` and bump
   `kSchemaVersion`; never edit a shipped migration. Add a test that upgrades a
   database in the previous format (see "A version 1 database is upgraded").
-  Current schema version: **4** (v2 added people.display_name, v3 added
+  Current schema version: **6** (v2 added people.display_name, v3 added
   accounts.institution_display, v4 added account_previous_numbers and
-  account_name_history).
+  account_name_history, v5 added accounts.is_combined and combined_members, v6 added
+  accounts.opened_on and closed_on, "YYYY-MM-DD" or empty).
 - **Database errors**: rule violations throw `DatabaseError` with a message meant
   for the user; GUI calls go through `ui::runGuarded(this, [&]{ ... })`.
 - **Widget destructors**: any widget that connects its children's signals to itself
   calls `ui::disconnectChildren(this)` first in its destructor (see Lessons).
 - **Aggregate orders** (brace-initializers must follow them; new fields go at the END
   so existing initializers keep working):
-  `Account{id, caseId, institution, institutionDisplay, accountType, lastFour, owners, previousLastFour}`,
-  `AccountRecord{id, caseId, institution, institutionDisplay, accountType, lastFour, ownerIds, previousLastFour}`,
+  `Account{id, caseId, institution, institutionDisplay, accountType, lastFour, owners, previousLastFour, combined, openedOn, closedOn}`,
+  `AccountRecord{id, caseId, institution, institutionDisplay, accountType, lastFour, ownerIds, previousLastFour, memberIds, openedOn, closedOn}`,
+  `CombinedPart{accountId, accountType, lastFour}`,
   `PlanInput{source, account, date, skip, number}`.
 - `updateAccount(record, numberCorrections)`: history rows store, for each old file
   name, the number files with that name should **now** use (corrected text, or the
@@ -184,6 +233,15 @@ Catch2 3.7.1 (vcpkg if present, else FetchContent from GitHub).
 - Key rename-screen widgets have `objectName`s ("files", "account", "number", "date",
   "singleDate" (its boxes "year", "month", "day"), "quarter", "quarterYear", "skip", "next", "apply", "undo",
   "summary", "byAccount", "byYear", "preview") for automated GUI tests.
+- **Start screen** (`HomeWindow`, what `main.cpp` shows): three tiles -- **Case List**
+  (opens `MainWindow`, hiding the start screen until it's closed), **File Renamer** (the
+  rename screen; the program's name for it is "File Renamer", not "Rename Files") and
+  **Deficiency List**; the last two ask which case via `CasePickerDialog` (last case
+  preselected). Closing the start screen quits the app (`quitOnLastWindowClosed` is off).
+  objectNames: "caseList", "fileRenamer", "deficiencyList".
+- Account dialog objectNames: "statementType", "members", "memberChoice", "addMember", "numbers", "openedOn", "closedOn".
+- Deficiency dialog objectNames: "folders", "subfolders", "fromMonth", "fromYear", "toMonth", "toYear",
+  "present", "found", "missing", "accounts", "preview", "summary", "unmatched", "save".
 - The PDF preview reads the file into memory (QBuffer) so it never locks the file
   against renaming.
 
@@ -217,7 +275,8 @@ Catch2 3.7.1 (vcpkg if present, else FetchContent from GitHub).
 
 Done: core logic, database, case/people/account management, rename screen
 (carry-forward, skip, sorting, partial apply, undo last, refresh), rename history,
-PDF preview, installer, previous account numbers, Update File Names.
+PDF preview, installer, previous account numbers, Update File Names (multi-folder,
+in place), Year/Month/Day date boxes, combined statements, Deficiency List (Word report).
 
 Ideas discussed, not built yet (user's choice of order):
 1. Real-world trial on copies of client folders; fix friction found.

@@ -26,6 +26,7 @@
 #include "HistoryDialog.h"
 #include "PersonDialog.h"
 #include "RenameWindow.h"
+#include "DeficiencyDialog.h"
 #include "UpdateNamesDialog.h"
 #include "QtHelpers.h"
 #include "finrenamer/FilenameBuilder.h"
@@ -85,7 +86,7 @@ QHBoxLayout* buttonRow(std::initializer_list<QPushButton*> buttons)
 MainWindow::MainWindow(Database& db, const QString& dataFolder, QWidget* parent)
     : QMainWindow(parent), db_(db), dataFolder_(dataFolder)
 {
-    setWindowTitle(tr("FinRenamer"));
+    setWindowTitle(tr("Case List - FinRenamer"));
     buildUi();
     buildMenus();
     statusBar()->showMessage(tr("Data folder: %1").arg(dataFolder_));
@@ -137,7 +138,7 @@ void MainWindow::buildUi()
     caseNotes_->setWordWrap(true);
     caseNotes_->setStyleSheet("color: palette(placeholder-text);");
 
-    renameFilesBtn_ = new QPushButton(tr("Rename Files..."));
+    renameFilesBtn_ = new QPushButton(tr("File Renamer..."));
     renameFilesBtn_->setToolTip(tr("Choose a folder of statements and rename them using this case's accounts"));
     QFont big = renameFilesBtn_->font();
     big.setBold(true);
@@ -151,9 +152,13 @@ void MainWindow::buildUi()
     updateNamesBtn_ = new QPushButton(tr("Update File Names..."));
     updateNamesBtn_->setToolTip(tr("Find files and folders still using an account's old name "
                                    "(after an edit) and update them"));
+    deficiencyBtn_ = new QPushButton(tr("Deficiency List..."));
+    deficiencyBtn_->setToolTip(tr("Check the case's folders for missing monthly statements "
+                                  "and save a Word report"));
     auto* actions = new QVBoxLayout;
     actions->addWidget(renameFilesBtn_);
     actions->addWidget(updateNamesBtn_);
+    actions->addWidget(deficiencyBtn_);
     header->addLayout(actions);
 
     // People
@@ -212,6 +217,7 @@ void MainWindow::buildUi()
     connect(newCaseBtn, &QPushButton::clicked, this, &MainWindow::newCase);
     connect(renameFilesBtn_, &QPushButton::clicked, this, &MainWindow::renameFiles);
     connect(updateNamesBtn_, &QPushButton::clicked, this, &MainWindow::updateFileNames);
+    connect(deficiencyBtn_, &QPushButton::clicked, this, &MainWindow::deficiencyList);
     connect(editCaseBtn_, &QPushButton::clicked, this, &MainWindow::editCase);
     connect(deleteCaseBtn_, &QPushButton::clicked, this, &MainWindow::deleteCase);
 
@@ -352,14 +358,25 @@ void MainWindow::reloadAccounts(std::optional<std::int64_t> select)
                 a.institutionDisplay == a.institution
                     ? qstr(a.institution)
                     : QStringLiteral("%1 (%2)").arg(qstr(a.institution), qstr(a.institutionDisplay));
+            QString type = qstr(a.accountType);
             QString number = qstr(a.lastFour);
-            if (!a.previousLastFour.empty()) {
+            if (a.isCombined()) {
+                // "Combined: Chk, Sav" / "1111, 2222", in the statement's order.
+                QStringList types, numbers;
+                for (const auto memberId : a.memberIds)
+                    for (const AccountRecord& m : accounts)
+                        if (m.id == memberId) {
+                            types << qstr(m.accountType);
+                            numbers << qstr(m.lastFour);
+                        }
+                type = tr("Combined: %1").arg(types.join(QStringLiteral(", ")));
+                number = numbers.join(QStringLiteral(", "));
+            } else if (!a.previousLastFour.empty()) {
                 QStringList was;
                 for (const auto& n : a.previousLastFour) was << qstr(n);
                 number += tr(" (was %1)").arg(was.join(QStringLiteral(", ")));
             }
-            const QStringList cells{institution, qstr(a.accountType), number,
-                                    owners.join(QStringLiteral("; "))};
+            const QStringList cells{institution, type, number, owners.join(QStringLiteral("; "))};
             for (int col = 0; col < cells.size(); ++col) {
                 auto* item = new QTableWidgetItem(cells[col]);
                 item->setData(kIdRole, QVariant::fromValue<qlonglong>(a.id));
@@ -375,6 +392,7 @@ void MainWindow::updateButtons()
     const bool hasCase = currentCaseId().has_value();
     renameFilesBtn_->setEnabled(hasCase);
     updateNamesBtn_->setEnabled(hasCase);
+    deficiencyBtn_->setEnabled(hasCase);
     editCaseBtn_->setEnabled(hasCase);
     deleteCaseBtn_->setEnabled(hasCase);
 
@@ -550,13 +568,22 @@ void MainWindow::deleteAccount()
     const auto id = currentAccountId();
     if (!id) return;
 
-    const int row = accountTable_->currentRow();
-    const QString label = QStringLiteral("%1 %2 %3").arg(accountTable_->item(row, 0)->text(),
-                                                         accountTable_->item(row, 1)->text(),
-                                                         accountTable_->item(row, 2)->text());
+    QString label;
+    bool combined = false;
+    if (const auto caseId = currentCaseId())
+        runGuarded(this, [&] {
+            for (const Account& a : db_.loadAccounts(*caseId))
+                if (a.id == *id) {
+                    label = qstr(accountLabel(a));
+                    combined = a.isCombined();
+                }
+        });
     const auto answer = QMessageBox::question(
-        this, tr("Delete Account"),
-        tr("Delete the account \"%1\"?\n\nFiles already renamed for it are not affected.").arg(label),
+        this, combined ? tr("Delete Combined Statement") : tr("Delete Account"),
+        (combined ? tr("Delete the combined statement \"%1\"?\n\nIts accounts are kept. Files already "
+                       "renamed for it are not affected.")
+                  : tr("Delete the account \"%1\"?\n\nFiles already renamed for it are not affected."))
+            .arg(label),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (answer != QMessageBox::Yes) return;
 
@@ -611,6 +638,15 @@ void MainWindow::offerNameUpdate(const std::set<std::string>& namesBefore)
            "Update them now? You'll see every change before anything is renamed."),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (answer == QMessageBox::Yes) updateFileNames();
+}
+
+void MainWindow::deficiencyList()
+{
+    const auto caseId = currentCaseId();
+    if (!caseId) return;
+    DeficiencyDialog dialog(db_, *caseId, this);
+    if (!dialog.hasFolders() && !dialog.promptForFolder()) return;
+    dialog.exec();
 }
 
 void MainWindow::updateFileNames()

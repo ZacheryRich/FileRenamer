@@ -7,9 +7,9 @@
 #include "finrenamer/Database.h"
 #include "finrenamer/RenamePlan.h"
 
+class CaseFolderList;
 class QCheckBox;
 class QLabel;
-class QListWidget;
 class QPushButton;
 class QTableWidget;
 
@@ -25,17 +25,10 @@ public:
 
     // Shows the folder picker and adds the chosen folder. False if cancelled.
     bool promptForFolder();
-    void addFolder(const QString& folder);  // also used by tests and drag-and-drop
+    void addFolder(const QString& folder);  // also used by tests
     bool hasFolders() const;
 
-protected:
-    void dragEnterEvent(QDragEnterEvent* event) override;
-    void dropEvent(QDropEvent* event) override;
-
 private:
-    QStringList folders() const;
-    void removeSelectedFolders();
-    void saveFolders() const;
     void scan();
     void apply();
 
@@ -43,8 +36,7 @@ private:
     std::int64_t caseId_;
     finrenamer::RenamePlan plan_;
 
-    QListWidget* folders_ = nullptr;
-    QPushButton* removeBtn_ = nullptr;
+    CaseFolderList* folderList_ = nullptr;
     QCheckBox* subfolders_ = nullptr;
     QCheckBox* renameFolders_ = nullptr;
     QTableWidget* table_ = nullptr;

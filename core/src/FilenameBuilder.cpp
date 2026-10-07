@@ -45,10 +45,24 @@ std::string buildLabel(const Account& account, std::string_view number, bool wit
     };
 
     append(account.institutionDisplay.empty() ? account.institution : account.institutionDisplay);
-    append(account.accountType);
-    append(number.empty() ? std::string_view(account.lastFour) : number);
+    if (account.isCombined()) {
+        // "Checking x1111, Savings x2222" -- one folder name for files and folder.
+        std::string parts;
+        for (const CombinedPart& p : account.combined) {
+            std::string part = sanitizeComponent(p.accountType);
+            const std::string n = sanitizeComponent(p.lastFour);
+            if (!n.empty()) part += (part.empty() ? "x" : " x") + n;
+            if (part.empty()) continue;
+            if (!parts.empty()) parts += ", ";
+            parts += part;
+        }
+        append(parts);
+    } else {
+        append(account.accountType);
+        append(number.empty() ? std::string_view(account.lastFour) : number);
+    }
 
-    if (withPrevious) {
+    if (withPrevious && !account.isCombined()) {
         std::string was;
         for (const auto& n : account.previousLastFour) {
             const std::string clean = sanitizeComponent(n);
@@ -94,6 +108,13 @@ std::string buildFilename(const Account& account, const DateSpec& date,
 std::optional<std::string> validateAccount(const Account& account)
 {
     if (sanitizeComponent(account.institution).empty()) return "Account has no institution.";
+    if (account.isCombined()) {
+        if (account.combined.size() < 2) return "A combined statement needs at least two accounts.";
+        for (const CombinedPart& p : account.combined)
+            if (sanitizeComponent(p.accountType).empty() || sanitizeComponent(p.lastFour).empty())
+                return "An account on the combined statement has no type or number.";
+        return std::nullopt;
+    }
     if (sanitizeComponent(account.accountType).empty()) return "Account has no account type.";
     if (sanitizeComponent(account.lastFour).empty()) return "Account has no last four digits.";
     return std::nullopt;

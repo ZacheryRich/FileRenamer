@@ -24,6 +24,7 @@ public:
     ~DateField() override;
 
     std::optional<std::chrono::year_month_day> date() const;
+    bool isBlank() const;         // all three boxes empty
     bool hasInvalidText() const;  // a month/day out of range, or a day the month doesn't have
     QString problem() const;      // why, for the status line ("" when fine)
     void setDate(std::optional<std::chrono::year_month_day> date);

@@ -15,6 +15,7 @@
 
 #include <set>
 
+#include "DateWidgets.h"
 #include "PersonDialog.h"
 #include "QtHelpers.h"
 #include "finrenamer/FilenameBuilder.h"
@@ -49,7 +50,23 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
                              std::optional<AccountRecord> existing, QWidget* parent)
     : QDialog(parent), db_(db), caseId_(caseId), existing_(std::move(existing))
 {
-    setWindowTitle(existing_ ? tr("Edit Account") : tr("New Account"));
+    const bool editingCombined = existing_ && existing_->isCombined();
+    setWindowTitle(editingCombined ? tr("Edit Combined Statement")
+                   : existing_     ? tr("Edit Account")
+                                   : tr("New Account"));
+
+    // ---- Single account or combined statement ----
+    kind_ = new QComboBox;
+    kind_->setObjectName("statementType");
+    kind_->addItem(tr("Single account"));
+    kind_->addItem(tr("Combined statement (several accounts on one PDF)"));
+    if (existing_) {
+        kind_->setCurrentIndex(editingCombined ? 1 : 0);
+        kind_->setEnabled(false);
+        kind_->setToolTip(tr("Fixed once saved. To switch, create a new one and delete this one."));
+    }
+    auto* kindForm = new QFormLayout;
+    kindForm->addRow(tr("Statement:"), kind_);
 
     // ---- Account fields ----
     institution_ = new QLineEdit;
@@ -119,11 +136,68 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
     numbersBox->addLayout(numbersRow);
     numbersBox->addWidget(numbersHint);
 
-    auto* form = new QFormLayout;
+    // ---- Optional opening and closing dates (for the Deficiency List) ----
+    openedOn_ = new DateField;
+    openedOn_->setObjectName("openedOn");
+    closedOn_ = new DateField;
+    closedOn_->setObjectName("closedOn");
+    auto* datesHint = new QLabel(tr("Optional. The Deficiency List only expects statements from the month "
+                                    "an account was opened through the month it was closed."));
+    datesHint->setWordWrap(true);
+    datesHint->setStyleSheet("color: palette(placeholder-text);");
+    auto* datesBox = new QVBoxLayout;
+    datesBox->addWidget(datesHint);
+
+    singlePage_ = new QWidget;
+    auto* form = new QFormLayout(singlePage_);
+    form->setContentsMargins(0, 0, 0, 0);
     form->addRow(tr("Institution:"), institution_);
     form->addRow(tr("Display name:"), institutionDisplay_);
     form->addRow(tr("Account type:"), type_);
     form->addRow(tr("Account numbers:"), numbersBox);
+    form->addRow(tr("Opened on:"), openedOn_);
+    form->addRow(tr("Closed on:"), closedOn_);
+    form->addRow(QString(), datesBox);
+
+    // ---- Combined statement: its accounts, in name order ----
+    runGuarded(this, [&] {
+        for (Account& a : db_.loadAccounts(caseId_))
+            if (!a.isCombined()) singles_.push_back(std::move(a));
+    });
+    members_ = new QListWidget;
+    members_->setObjectName("members");
+    members_->setMinimumHeight(110);
+    memberUpBtn_ = new QPushButton(tr("Move Up"));
+    memberDownBtn_ = new QPushButton(tr("Move Down"));
+    removeMemberBtn_ = new QPushButton(tr("Remove"));
+    auto* memberButtons = new QVBoxLayout;
+    memberButtons->addWidget(memberUpBtn_);
+    memberButtons->addWidget(memberDownBtn_);
+    memberButtons->addWidget(removeMemberBtn_);
+    memberButtons->addStretch();
+    auto* memberRow = new QHBoxLayout;
+    memberRow->addWidget(members_, 1);
+    memberRow->addLayout(memberButtons);
+
+    memberChoice_ = new QComboBox;
+    memberChoice_->setObjectName("memberChoice");
+    addMemberBtn_ = new QPushButton(tr("Add"));
+    addMemberBtn_->setObjectName("addMember");
+    auto* addMemberRow = new QHBoxLayout;
+    addMemberRow->addWidget(memberChoice_, 1);
+    addMemberRow->addWidget(addMemberBtn_);
+
+    auto* membersHint = new QLabel(tr("The accounts on this statement, in the order they appear in the "
+                                      "name. All must be at the same institution; add each one as an "
+                                      "account first. Each shows its type as entered and current number."));
+    membersHint->setWordWrap(true);
+    membersHint->setStyleSheet("color: palette(placeholder-text);");
+
+    combinedPage_ = new QGroupBox(tr("Accounts on the statement"));
+    auto* combinedLayout = new QVBoxLayout(combinedPage_);
+    combinedLayout->addWidget(membersHint);
+    combinedLayout->addLayout(memberRow);
+    combinedLayout->addLayout(addMemberRow);
 
     // ---- Owners ----
     owners_ = new QListWidget;
@@ -177,13 +251,23 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
     buttons_ = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
 
     auto* layout = new QVBoxLayout(this);
-    layout->addLayout(form);
+    layout->addLayout(kindForm);
+    layout->addWidget(singlePage_);
+    layout->addWidget(combinedPage_);
     layout->addWidget(ownersBox, 1);
     layout->addWidget(previewBox);
     layout->addWidget(error_);
     layout->addWidget(buttons_);
 
     // ---- Fill in an existing account ----
+    if (editingCombined) {
+        for (const auto id : existing_->memberIds) {
+            if (const Account* a = singleAccount(id)) {
+                auto* item = new QListWidgetItem(qstr(accountLabel(*a)), members_);
+                item->setData(kIdRole, QVariant::fromValue<qlonglong>(id));
+            }
+        }
+    }
     if (existing_) {
         institution_->setText(qstr(existing_->institution));
         // Blank when it's just the institution, so editing the institution carries through.
@@ -192,6 +276,8 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
             displayEditedByUser_ = true;
         }
         type_->setText(qstr(existing_->accountType));
+        openedOn_->setDate(existing_->openedOn);
+        closedOn_->setDate(existing_->closedOn);
         addNumberItem(numbers_, qstr(existing_->lastFour));
         for (const auto& n : existing_->previousLastFour) addNumberItem(numbers_, qstr(n));
         runGuarded(this, [&] {
@@ -206,12 +292,21 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
     numbers_->setCurrentRow(0);
     styleNumbers();
     reloadPeopleChoices();
+    reloadMemberChoices();
 
     // ---- Wiring ----
+    connect(kind_, &QComboBox::currentIndexChanged, this, &AccountDialog::updateKind);
+    connect(members_, &QListWidget::currentRowChanged, this, &AccountDialog::updateState);
+    connect(addMemberBtn_, &QPushButton::clicked, this, &AccountDialog::addMember);
+    connect(removeMemberBtn_, &QPushButton::clicked, this, &AccountDialog::removeMember);
+    connect(memberUpBtn_, &QPushButton::clicked, this, [this] { moveMember(-1); });
+    connect(memberDownBtn_, &QPushButton::clicked, this, [this] { moveMember(+1); });
     connect(buttons_, &QDialogButtonBox::accepted, this, &AccountDialog::accept);
     connect(buttons_, &QDialogButtonBox::rejected, this, &QDialog::reject);
     for (auto* edit : {institution_, institutionDisplay_, type_})
         connect(edit, &QLineEdit::textChanged, this, &AccountDialog::updateState);
+    connect(openedOn_, &DateField::changed, this, &AccountDialog::updateState);
+    connect(closedOn_, &DateField::changed, this, &AccountDialog::updateState);
     connect(numbers_, &QListWidget::itemChanged, this, &AccountDialog::updateState);
     connect(numbers_, &QListWidget::currentRowChanged, this, &AccountDialog::updateState);
     connect(addNumberBtn, &QPushButton::clicked, this, &AccountDialog::addNumber);
@@ -232,12 +327,86 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
     connect(downBtn_, &QPushButton::clicked, this, [this] { moveOwner(+1); });
 
     resize(560, 640);
-    updateState();
+    updateKind();
 }
 
 AccountDialog::~AccountDialog()
 {
     disconnectChildren(this);
+}
+
+bool AccountDialog::isCombined() const
+{
+    return kind_->currentIndex() == 1;
+}
+
+void AccountDialog::updateKind()
+{
+    singlePage_->setVisible(!isCombined());
+    combinedPage_->setVisible(isCombined());
+    if (!existing_) setWindowTitle(isCombined() ? tr("New Combined Statement") : tr("New Account"));
+    updateState();
+}
+
+const Account* AccountDialog::singleAccount(std::int64_t id) const
+{
+    for (const Account& a : singles_)
+        if (a.id == id) return &a;
+    return nullptr;
+}
+
+void AccountDialog::reloadMemberChoices()
+{
+    std::set<qlonglong> taken;
+    for (int i = 0; i < members_->count(); ++i) taken.insert(members_->item(i)->data(kIdRole).toLongLong());
+
+    // Once one account is on the statement, only its institution's accounts fit.
+    QString institution;
+    if (members_->count() > 0)
+        if (const Account* first = singleAccount(members_->item(0)->data(kIdRole).toLongLong()))
+            institution = qstr(first->institution).trimmed();
+
+    memberChoice_->clear();
+    for (const Account& a : singles_) {
+        if (taken.count(a.id)) continue;
+        if (!institution.isEmpty() && qstr(a.institution).trimmed().compare(institution, Qt::CaseInsensitive) != 0)
+            continue;
+        memberChoice_->addItem(qstr(accountLabel(a)), QVariant::fromValue<qlonglong>(a.id));
+    }
+    if (memberChoice_->count() == 0)
+        memberChoice_->setPlaceholderText(singles_.empty() ? tr("Add the accounts first (Single account)")
+                                          : institution.isEmpty()
+                                              ? tr("No accounts left")
+                                              : tr("No other %1 accounts on this case").arg(institution));
+}
+
+void AccountDialog::addMember()
+{
+    const int index = memberChoice_->currentIndex();
+    if (index < 0) return;
+    auto* item = new QListWidgetItem(memberChoice_->itemText(index), members_);
+    item->setData(kIdRole, memberChoice_->itemData(index));
+    members_->setCurrentItem(item);
+    reloadMemberChoices();
+    updateState();
+}
+
+void AccountDialog::removeMember()
+{
+    delete members_->takeItem(members_->currentRow());
+    reloadMemberChoices();
+    updateState();
+}
+
+void AccountDialog::moveMember(int delta)
+{
+    const int row = members_->currentRow();
+    const int target = row + delta;
+    if (row < 0 || target < 0 || target >= members_->count()) return;
+    QListWidgetItem* item = members_->takeItem(row);
+    members_->insertItem(target, item);
+    members_->setCurrentRow(target);
+    updateState();
 }
 
 void AccountDialog::reloadPeopleChoices()
@@ -317,6 +486,20 @@ void AccountDialog::autofillInstitutionDisplay()
 Account AccountDialog::currentAccount() const
 {
     Account a;
+    for (int i = 0; i < owners_->count(); ++i)
+        a.owners.push_back(stdstr(owners_->item(i)->data(kDisplayRole).toString()));
+    if (isCombined()) {
+        for (int i = 0; i < members_->count(); ++i) {
+            const Account* m = singleAccount(members_->item(i)->data(kIdRole).toLongLong());
+            if (!m) continue;
+            if (a.combined.empty()) {
+                a.institution = m->institution;
+                a.institutionDisplay = m->institutionDisplay;
+            }
+            a.combined.push_back({m->id, m->accountType, m->lastFour});
+        }
+        return a;
+    }
     a.institution = stdstr(institution_->text());
     a.institutionDisplay = stdstr(institutionDisplay_->text().trimmed());
     a.accountType = stdstr(type_->text());
@@ -325,8 +508,6 @@ Account AccountDialog::currentAccount() const
         a.lastFour = all.front();
         a.previousLastFour.assign(all.begin() + 1, all.end());
     }
-    for (int i = 0; i < owners_->count(); ++i)
-        a.owners.push_back(stdstr(owners_->item(i)->data(kDisplayRole).toString()));
     return a;
 }
 
@@ -409,12 +590,24 @@ void AccountDialog::updateState()
     numberDownBtn_->setEnabled(numberRow >= 0 && numberRow < numbers_->count() - 1);
     removeNumberBtn_->setEnabled(numberRow >= 0 && numbers_->count() > 1);
 
+    const int memberRow = members_->currentRow();
+    memberUpBtn_->setEnabled(memberRow > 0);
+    memberDownBtn_->setEnabled(memberRow >= 0 && memberRow < members_->count() - 1);
+    removeMemberBtn_->setEnabled(memberRow >= 0);
+    addMemberBtn_->setEnabled(memberChoice_->count() > 0);
+
     const Account a = currentAccount();
     const bool valid = !validateAccount(a);
-    buttons_->button(QDialogButtonBox::Ok)->setEnabled(valid);
+    // An opening/closing date may be left blank, but not half-typed or impossible.
+    const bool datesOk = isCombined() || ((openedOn_->isBlank() || openedOn_->date()) &&
+                                          (closedOn_->isBlank() || closedOn_->date()));
+    buttons_->button(QDialogButtonBox::Ok)->setEnabled(valid && datesOk);
 
     // Shows the cleaned-up label, so illegal characters are visibly replaced.
-    if (valid) {
+    if (valid && a.isCombined()) {
+        preview_->setTextFormat(Qt::PlainText);
+        preview_->setText(tr("File:    YYYY.MM.DD %1.pdf\nFolder:  %1").arg(qstr(accountLabel(a))));
+    } else if (valid) {
         preview_->setTextFormat(Qt::PlainText);
         QString text = tr("File:    YYYY.MM.DD %1.pdf").arg(qstr(accountLabel(a)));
         if (!a.previousLastFour.empty())
@@ -423,7 +616,8 @@ void AccountDialog::updateState()
         preview_->setText(text);
     } else {
         preview_->setTextFormat(Qt::RichText);
-        preview_->setText(tr("<i>Fill in institution, account type and an account number.</i>"));
+        preview_->setText(isCombined() ? tr("<i>Add at least two accounts from the same institution.</i>")
+                                       : tr("<i>Fill in institution, account type and an account number.</i>"));
     }
 }
 
@@ -432,18 +626,26 @@ void AccountDialog::accept()
     AccountRecord r;
     r.id = existing_ ? existing_->id : 0;
     r.caseId = caseId_;
+    for (int i = 0; i < owners_->count(); ++i)
+        r.ownerIds.push_back(owners_->item(i)->data(kIdRole).toLongLong());
+    if (isCombined()) {
+        for (int i = 0; i < members_->count(); ++i)
+            r.memberIds.push_back(members_->item(i)->data(kIdRole).toLongLong());
+    }
     r.institution = stdstr(institution_->text());
     r.institutionDisplay = stdstr(institutionDisplay_->text());
     r.accountType = stdstr(type_->text());
     const Account shown = currentAccount();
     r.lastFour = shown.lastFour;
     r.previousLastFour = shown.previousLastFour;
-    for (int i = 0; i < owners_->count(); ++i)
-        r.ownerIds.push_back(owners_->item(i)->data(kIdRole).toLongLong());
+    if (!isCombined()) {
+        r.openedOn = openedOn_->date();
+        r.closedOn = closedOn_->date();
+    }
 
     try {
         if (existing_) {
-            db_.updateAccount(r, numberCorrections());
+            db_.updateAccount(r, isCombined() ? Database::NumberCorrections{} : numberCorrections());
             savedId_ = r.id;
         } else {
             savedId_ = db_.createAccount(r);

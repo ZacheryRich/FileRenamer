@@ -13,11 +13,13 @@ with optional subfolders by account (full label), by year, or both.
 - [x] `core/`: date modes, filename builder, folder planner, rename plan, rename/undo engine
 - [x] `core/Database`: SQLite storage (cases, people, accounts, rename history)
 - [x] `core/RenameSession`: rename-screen state (rows, carry-forward, refresh, apply, undo last)
-- [x] `tests/`: Catch2 suite (78 tests)
+- [x] `tests/`: Catch2 suite (98 tests)
 - [x] `app/`: Qt 6 main window (cases, people, accounts) and dialogs
 - [x] Rename screen (file table, date modes, sorting, apply/undo) and Rename History
 - [x] PDF preview pane (Qt PDF; optional at build time)
+- [x] Deficiency List: missing monthly statements per account, saved as a Word (.docx) report (no extra library)
 - [x] Previous account numbers (`(was x1234)` in folder names) and Update File Names (several folders, renamed in place)
+- [x] Combined statements (`Chase Chk x1111, Sav x2222 (H)`), set up in the account dialog
 
 ## Building (Windows, Visual Studio 2022)
 

@@ -96,7 +96,7 @@ RenameWindow::RenameWindow(Database& db, std::int64_t caseId, QWidget* parent)
     setWindowFlags(windowFlags() | Qt::WindowMinMaxButtonsHint);
     std::optional<ClientCase> c;
     runGuarded(this, [&] { c = db_.getCase(caseId_); });
-    setWindowTitle(tr("Rename Files - %1").arg(c ? qstr(c->clientName) : QString()));
+    setWindowTitle(tr("File Renamer - %1").arg(c ? qstr(c->clientName) : QString()));
 
     buildUi();
     reloadAccounts();
@@ -411,7 +411,7 @@ void RenameWindow::fillNumbers(std::optional<std::int64_t> accountId, const std:
     for (const Account& a : accounts_)
         if (accountId && a.id == *accountId) account = &a;
 
-    if (account) {
+    if (account && !account->isCombined()) {  // a combined statement uses each account's current number
         // Newest first: the current number, then the older ones.
         number_->addItem(tr("%1  (current)").arg(qstr(account->lastFour)), QString());
         for (const auto& n : account->previousLastFour) number_->addItem(qstr(n), qstr(n));

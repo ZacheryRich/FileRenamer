@@ -187,6 +187,13 @@ QString DateField::problem() const
     return {};
 }
 
+bool DateField::isBlank() const
+{
+    for (const QLineEdit* part : parts_)
+        if (!part->text().trimmed().isEmpty()) return false;
+    return true;
+}
+
 bool DateField::hasInvalidText() const
 {
     return !problem().isEmpty();

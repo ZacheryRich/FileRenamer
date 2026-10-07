@@ -4,22 +4,17 @@
 #include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QDir>
-#include <QDragEnterEvent>
-#include <QDropEvent>
-#include <QFileDialog>
-#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
-#include <QListWidget>
 #include <QMessageBox>
-#include <QMimeData>
 #include <QPushButton>
 #include <QSettings>
 #include <QSplitter>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
+#include "CaseFolderList.h"
 #include "QtHelpers.h"
 #include "finrenamer/NameFixer.h"
 #include "finrenamer/RenameEngine.h"
@@ -35,18 +30,12 @@ enum Column { ColWhere = 0, ColNow = 1, ColNew = 2, ColStatus = 3 };
 const QColor kRed(0xc4, 0x2b, 0x1c);
 const QColor kGrey(0x70, 0x70, 0x70);
 
-QString settingsKey(std::int64_t caseId)
-{
-    return QStringLiteral("updateNames/case%1/folders").arg(caseId);
-}
-
 }  // namespace
 
 UpdateNamesDialog::UpdateNamesDialog(Database& db, std::int64_t caseId, QWidget* parent)
     : QDialog(parent), db_(db), caseId_(caseId)
 {
     setWindowFlags(windowFlags() | Qt::WindowMaximizeButtonHint);
-    setAcceptDrops(true);
     std::optional<ClientCase> c;
     runGuarded(this, [&] { c = db_.getCase(caseId_); });
     setWindowTitle(tr("Update File Names - %1").arg(c ? qstr(c->clientName) : QString()));
@@ -58,38 +47,22 @@ UpdateNamesDialog::UpdateNamesDialog(Database& db, std::int64_t caseId, QWidget*
         "Nothing changes until you click Apply, and Rename History can undo it."));
     intro->setWordWrap(true);
 
-    // ---- Folders to search ----
-    folders_ = new QListWidget;
-    folders_->setObjectName("folders");
-    folders_->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    folders_->setToolTip(tr("You can also drag folders here from File Explorer."));
-
-    auto* addBtn = new QPushButton(tr("Add Folder..."));
-    addBtn->setObjectName("addFolder");
-    removeBtn_ = new QPushButton(tr("Remove"));
+    // ---- Folders to search (shared with the Deficiency List) ----
+    folderList_ = new CaseFolderList(caseId_);
     subfolders_ = new QCheckBox(tr("Include subfolders"));
     subfolders_->setObjectName("subfolders");
     renameFolders_ = new QCheckBox(tr("Also rename account folders"));
     renameFolders_->setObjectName("renameFolders");
     renameFolders_->setToolTip(tr("An account folder still using an old name (or missing \"(was x...)\") "
                                   "is renamed where it is; its contents stay inside it."));
+    folderList_->addSideWidget(subfolders_);
+    folderList_->addSideWidget(renameFolders_);
 
     QSettings settings(settingsFile(), QSettings::IniFormat);
     subfolders_->setChecked(settings.value("updateNames/includeSubfolders", true).toBool());
     renameFolders_->setChecked(settings.value("updateNames/renameFolders", true).toBool());
 
-    auto* folderButtons = new QVBoxLayout;
-    folderButtons->addWidget(addBtn);
-    folderButtons->addWidget(removeBtn_);
-    folderButtons->addStretch();
-    folderButtons->addWidget(subfolders_);
-    folderButtons->addWidget(renameFolders_);
-
-    auto* foldersBox = new QWidget;
-    auto* foldersLayout = new QHBoxLayout(foldersBox);
-    foldersLayout->setContentsMargins(0, 0, 0, 0);
-    foldersLayout->addWidget(folders_, 1);
-    foldersLayout->addLayout(folderButtons);
+    auto* foldersBox = folderList_;
 
     // ---- Changes ----
     table_ = new QTableWidget(0, 4);
@@ -133,14 +106,7 @@ UpdateNamesDialog::UpdateNamesDialog(Database& db, std::int64_t caseId, QWidget*
 
     for (auto* b : findChildren<QPushButton*>()) b->setAutoDefault(false);
 
-    // Folders used for this case before (that still exist).
-    for (const QString& f : settings.value(settingsKey(caseId_)).toStringList())
-        if (QFileInfo(f).isDir()) folders_->addItem(QDir::toNativeSeparators(f));
-
-    connect(addBtn, &QPushButton::clicked, this, &UpdateNamesDialog::promptForFolder);
-    connect(removeBtn_, &QPushButton::clicked, this, &UpdateNamesDialog::removeSelectedFolders);
-    connect(folders_, &QListWidget::itemSelectionChanged, this,
-            [this] { removeBtn_->setEnabled(!folders_->selectedItems().isEmpty()); });
+    connect(folderList_, &CaseFolderList::changed, this, &UpdateNamesDialog::scan);
     for (auto* box : {subfolders_, renameFolders_})
         connect(box, &QCheckBox::toggled, this, [this] {
             QSettings s(settingsFile(), QSettings::IniFormat);
@@ -153,7 +119,6 @@ UpdateNamesDialog::UpdateNamesDialog(Database& db, std::int64_t caseId, QWidget*
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     resize(1150, 640);
-    removeBtn_->setEnabled(false);
     scan();
 }
 
@@ -167,62 +132,17 @@ UpdateNamesDialog::~UpdateNamesDialog()
 
 bool UpdateNamesDialog::promptForFolder()
 {
-    QSettings settings(settingsFile(), QSettings::IniFormat);
-    const QStringList current = folders();
-    const QString start = current.isEmpty() ? settings.value("lastFolder").toString() : current.last();
-    const QString folder = QFileDialog::getExistingDirectory(this, tr("Add a folder to search"), start);
-    if (folder.isEmpty()) return false;
-    addFolder(folder);
-    return true;
+    return folderList_->promptForFolder();
 }
 
 void UpdateNamesDialog::addFolder(const QString& folder)
 {
-    const QString shown = QDir::toNativeSeparators(QDir::cleanPath(folder));
-    for (const QString& existing : folders())
-        if (QDir::cleanPath(existing).compare(QDir::cleanPath(folder), Qt::CaseInsensitive) == 0) return;
-    folders_->addItem(shown);
-    saveFolders();
-    scan();
+    folderList_->addFolder(folder);
 }
 
 bool UpdateNamesDialog::hasFolders() const
 {
-    return folders_->count() > 0;
-}
-
-QStringList UpdateNamesDialog::folders() const
-{
-    QStringList out;
-    for (int i = 0; i < folders_->count(); ++i) out << QDir::fromNativeSeparators(folders_->item(i)->text());
-    return out;
-}
-
-void UpdateNamesDialog::removeSelectedFolders()
-{
-    qDeleteAll(folders_->selectedItems());
-    saveFolders();
-    scan();
-}
-
-void UpdateNamesDialog::saveFolders() const
-{
-    QSettings settings(settingsFile(), QSettings::IniFormat);
-    settings.setValue(settingsKey(caseId_), folders());
-}
-
-void UpdateNamesDialog::dragEnterEvent(QDragEnterEvent* event)
-{
-    if (event->mimeData()->hasUrls()) event->acceptProposedAction();
-}
-
-void UpdateNamesDialog::dropEvent(QDropEvent* event)
-{
-    for (const QUrl& url : event->mimeData()->urls()) {
-        const QString path = url.toLocalFile();
-        if (QFileInfo(path).isDir()) addFolder(path);
-    }
-    event->acceptProposedAction();
+    return folderList_->hasFolders();
 }
 
 // ---------------------------------------------------------------------------
@@ -231,10 +151,9 @@ void UpdateNamesDialog::dropEvent(QDropEvent* event)
 void UpdateNamesDialog::scan()
 {
     plan_ = {};
-    const QStringList list = folders();
-    if (!list.isEmpty()) {
-        std::vector<fs::path> roots;
-        for (const QString& f : list) roots.push_back(toPath(f));
+    const bool anyFolders = folderList_->hasFolders();
+    if (anyFolders) {
+        const std::vector<fs::path> roots = folderList_->paths();
         NameFixOptions options;
         options.includeSubfolders = subfolders_->isChecked();
         options.renameFolders = renameFolders_->isChecked();
@@ -295,7 +214,7 @@ void UpdateNamesDialog::scan()
         }
     }
 
-    if (list.isEmpty())
+    if (!anyFolders)
         summary_->setText(tr("Add the folders to search."));
     else if (plan_.moves.empty())
         summary_->setText(tr("Everything in these folders already uses the current names."));
@@ -337,16 +256,6 @@ void UpdateNamesDialog::apply()
     }
 
     // A chosen folder that was itself renamed: follow it in the list.
-    bool listChanged = false;
-    for (const ExecutedMove& m : result.record.moves) {
-        for (int i = 0; i < folders_->count(); ++i) {
-            if (caseFoldKey(toPath(QDir::fromNativeSeparators(folders_->item(i)->text()))) ==
-                caseFoldKey(m.from)) {
-                folders_->item(i)->setText(QDir::toNativeSeparators(qpath(m.to)));
-                listChanged = true;
-            }
-        }
-    }
-    if (listChanged) saveFolders();
+    for (const ExecutedMove& m : result.record.moves) folderList_->replaceFolder(m.from, m.to);
     scan();  // shows what (if anything) is left
 }

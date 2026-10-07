@@ -247,3 +247,27 @@ TEST_CASE("Reordering numbers renames the account folder only")
     f.fix();
     CHECK(fs::exists(f.dir.path() / "Amex Card 5678 (was x1234) (H)" / "2026.01.31 Amex Card 1234 (H).pdf"));
 }
+
+TEST_CASE("Combined statement files and folders are fixed after a member's typo")
+{
+    Fixture f;
+    const auto chk = f.db.createAccount({0, f.caseId, "Chase", "", "Chekcing", "1111", {}});
+    const auto sav = f.db.createAccount({0, f.caseId, "Chase", "", "Savings", "2222", {}});
+    AccountRecord c;
+    c.caseId = f.caseId;
+    c.ownerIds = {f.husband};
+    c.memberIds = {chk, sav};
+    f.db.createAccount(c);
+
+    const fs::path folder = f.dir.path() / "Chase Chekcing x1111, Savings x2222 (H)";
+    f.dir.touch("Chase Chekcing x1111, Savings x2222 (H)/2026.01.31 Chase Chekcing x1111, Savings x2222 (H).pdf", "jan");
+
+    AccountRecord r = *f.db.getAccount(chk);
+    r.accountType = "Checking";
+    f.db.updateAccount(r);
+    f.fix();
+
+    const fs::path fixed = f.dir.path() / "Chase Checking x1111, Savings x2222 (H)";
+    CHECK(testing::readFile(fixed / "2026.01.31 Chase Checking x1111, Savings x2222 (H).pdf") == "jan");
+    CHECK_FALSE(fs::exists(folder));
+}

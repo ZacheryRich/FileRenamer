@@ -1,12 +1,13 @@
 #include "finrenamer/NameFixer.h"
 
 #include <algorithm>
-#include <regex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "finrenamer/FilenameBuilder.h"
+#include "finrenamer/FolderSearch.h"
+#include "finrenamer/StatementNames.h"
 #include "finrenamer/Utf8Path.h"
 
 namespace fs = std::filesystem;
@@ -14,12 +15,7 @@ namespace fs = std::filesystem;
 namespace finrenamer {
 namespace {
 
-std::string key(const std::string& utf8) { return caseFoldKey(pathFromUtf8(utf8)); }
-
-struct FileLabelInfo {
-    const Account* account = nullptr;
-    std::string number;  // the number files with this label should use
-};
+std::string key(const std::string& utf8) { return FileLabelIndex::key(utf8); }
 
 bool sameFile(const fs::path& a, const fs::path& b)
 {
@@ -33,19 +29,6 @@ bool usesNumber(const Account& a, const std::string& number)
     for (const auto& n : a.previousLastFour)
         if (key(n) == key(number)) return true;
     return false;
-}
-
-fs::path resolve(const fs::path& p)
-{
-    std::error_code ec;
-    fs::path r = fs::weakly_canonical(fs::absolute(p), ec);
-    return ec ? fs::absolute(p).lexically_normal() : r;
-}
-
-bool isInside(const fs::path& parent, const fs::path& p)
-{
-    const fs::path rel = p.lexically_relative(parent);
-    return !rel.empty() && *rel.begin() != ".." && rel != ".";
 }
 
 // Deepest folder containing every root (used as the batch's root in history).
@@ -72,45 +55,21 @@ RenamePlan planNameFixes(const std::vector<fs::path>& rootsIn, const std::vector
     std::error_code ec;
 
     // ---- Roots: resolved, de-duplicated, nested ones dropped when searching subfolders.
-    std::vector<fs::path> roots;
-    for (const fs::path& r : rootsIn) {
-        const fs::path p = resolve(r);
-        if (!fs::is_directory(p, ec)) continue;
-        if (std::any_of(roots.begin(), roots.end(), [&](const fs::path& q) { return caseFoldKey(q) == caseFoldKey(p); }))
-            continue;
-        roots.push_back(p);
-    }
-    if (options.includeSubfolders) {
-        std::vector<fs::path> outer;
-        for (const fs::path& r : roots)
-            if (std::none_of(roots.begin(), roots.end(), [&](const fs::path& q) { return isInside(q, r); }))
-                outer.push_back(r);
-        roots = std::move(outer);
-    }
+    const std::vector<fs::path> roots = searchRoots(rootsIn, options.includeSubfolders);
     plan.root = commonAncestor(roots);
 
     // ---- Names we recognise.
     std::unordered_map<std::int64_t, const Account*> byId;
     for (const Account& a : accounts) byId[a.id] = &a;
 
-    // Label (as used in file names) -> account and number. Current labels first,
-    // so a name that is current for one account is never treated as old.
-    std::unordered_map<std::string, FileLabelInfo> fileLabels;
-    for (const Account& a : accounts) {
-        fileLabels.emplace(key(accountLabel(a)), FileLabelInfo{&a, a.lastFour});
-        for (const auto& n : a.previousLastFour)
-            fileLabels.emplace(key(accountLabel(a, n)), FileLabelInfo{&a, n});
-    }
-    for (const OldAccountName& old : oldNames) {
-        if (old.isFolder || !byId.count(old.accountId)) continue;
-        fileLabels.emplace(key(old.name), FileLabelInfo{byId[old.accountId], old.lastFour});
-    }
+    // Label (as used in file names) -> account and number.
+    const FileLabelIndex fileLabels(accounts, oldNames);
 
     // Folder name -> account. Any label an account has ever had, used as a
     // folder name, is that account's folder.
     std::unordered_map<std::string, const Account*> folderNames;
     for (const Account& a : accounts) folderNames.emplace(key(accountFolderLabel(a)), &a);
-    for (const auto& [k, info] : fileLabels) folderNames.emplace(k, info.account);
+    for (const auto& [k, info] : fileLabels.entries()) folderNames.emplace(k, info.account);
     for (const OldAccountName& old : oldNames)
         if (old.isFolder && byId.count(old.accountId)) folderNames.emplace(key(old.name), byId[old.accountId]);
 
@@ -187,31 +146,20 @@ RenamePlan planNameFixes(const std::vector<fs::path>& rootsIn, const std::vector
     }
 
     // ---- 2. File names: "<date> <old label>[ (n)].pdf" -> "<date> <current label>.pdf".
-    static const std::regex datePrefix(
-        R"(^(\d{4}\.(?:Q[1-4]|\d{2}\.\d{2}(?: - \d{4}\.\d{2}\.\d{2})?)) (.+)$)");
-    static const std::regex numberSuffix(R"(^(.*) \((\d+)\)$)");
-
     for (const fs::path& file : files) {
         const std::string stem = utf8FromPath(file.stem());
         const std::string ext = utf8FromPath(file.extension());
-        std::smatch m;
-        if (!std::regex_match(stem, m, datePrefix)) continue;
+        const auto name = splitStatementName(stem);
+        if (!name) continue;
 
-        const std::string date = m[1];
-        std::string rest = m[2];
-        auto found = fileLabels.find(key(rest));
-        if (found == fileLabels.end()) {
-            std::smatch s;
-            if (std::regex_match(rest, s, numberSuffix)) {
-                rest = s[1];  // "label (2)" -> "label"
-                found = fileLabels.find(key(rest));
-            }
-        }
-        if (found == fileLabels.end()) continue;
+        const std::string& date = name->dateText;
+        std::string rest;  // the label without a " (2)" collision suffix
+        const auto found = fileLabels.find(name->label, &rest);
+        if (!found) continue;
 
-        const Account& a = *found->second.account;
+        const Account& a = *found->account;
         // Keep a number the account still has; one it no longer has -> current.
-        const std::string number = usesNumber(a, found->second.number) ? found->second.number : a.lastFour;
+        const std::string number = usesNumber(a, found->number) ? found->number : a.lastFour;
         const std::string label = accountLabel(a, key(number) == key(a.lastFour) ? std::string() : number);
         if (label == rest) continue;  // already current
 

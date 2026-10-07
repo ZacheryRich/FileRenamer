@@ -5,7 +5,7 @@
 
 #include <memory>
 
-#include "MainWindow.h"
+#include "HomeWindow.h"
 #include "QtHelpers.h"
 #include "finrenamer/Database.h"
 
@@ -29,7 +29,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    MainWindow window(*db, QDir::toNativeSeparators(dataFolder));
+    // The start screen quits the app itself; the Case List may hide it, not close it.
+    QApplication::setQuitOnLastWindowClosed(false);
+    HomeWindow window(*db, QDir::toNativeSeparators(dataFolder));
     window.show();
     return app.exec();
 }

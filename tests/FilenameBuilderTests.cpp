@@ -85,3 +85,27 @@ TEST_CASE("Previous numbers: folder shows them, file names don't")
     a.previousLastFour.clear();
     CHECK(accountFolderLabel(a) == accountLabel(a));  // unchanged when there are none
 }
+
+TEST_CASE("Combined statements list each account's type and number")
+{
+    Account c;
+    c.institution = "JPMorgan Chase";
+    c.institutionDisplay = "Chase";
+    c.combined = {{1, "Chk", "1111"}, {2, "Sav", "2222"}, {3, "Chk", "3333"}};
+    c.owners = {"H"};
+    CHECK(accountLabel(c) == "Chase Chk x1111, Sav x2222, Chk x3333 (H)");
+    CHECK(accountFolderLabel(c) == accountLabel(c));  // the folder is named the same way
+    CHECK(buildFilename(c, SingleDate{makeDate(2026, 1, 31)}) ==
+          "2026.01.31 Chase Chk x1111, Sav x2222, Chk x3333 (H).pdf");
+    CHECK(accountLabel(c, "9999") == accountLabel(c));  // per-file numbers don't apply
+
+    c.owners = {"H", "W"};
+    c.combined = {{1, "Checking", "1111"}, {2, "Savings", "2222"}};
+    CHECK(accountLabel(c) == "Chase Checking x1111, Savings x2222 (H; W)");
+    CHECK_FALSE(validateAccount(c));
+
+    c.combined.pop_back();
+    CHECK(validateAccount(c));  // needs two accounts
+    c.combined = {{1, "Checking", "1111"}, {2, "", "2222"}};
+    CHECK(validateAccount(c));
+}

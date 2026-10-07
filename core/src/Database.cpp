@@ -3,6 +3,7 @@
 #include <SQLiteCpp/SQLiteCpp.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <set>
 
 #include "finrenamer/FilenameBuilder.h"
@@ -14,7 +15,7 @@ namespace finrenamer {
 
 namespace {
 
-constexpr int kSchemaVersion = 4;
+constexpr int kSchemaVersion = 6;
 
 // Each entry upgrades the schema by one version. Never edit a shipped entry;
 // add a new one instead, so existing databases upgrade in place.
@@ -110,6 +111,26 @@ const char* const kMigrations[] = {
         PRIMARY KEY (account_id, is_folder, name)
     );
     )sql",
+
+    // Version 5: combined statements -- an accounts row (is_combined = 1) that
+    // stands for one PDF covering several accounts, listed in name order.
+    R"sql(
+    ALTER TABLE accounts ADD COLUMN is_combined INTEGER NOT NULL DEFAULT 0;
+
+    CREATE TABLE combined_members (
+        combined_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        position    INTEGER NOT NULL,
+        PRIMARY KEY (combined_id, account_id)
+    );
+    CREATE INDEX idx_combined_members_account ON combined_members(account_id);
+    )sql",
+
+    // Version 6: optional opening and closing dates ("YYYY-MM-DD", '' = unknown).
+    R"sql(
+    ALTER TABLE accounts ADD COLUMN opened_on TEXT NOT NULL DEFAULT '';
+    ALTER TABLE accounts ADD COLUMN closed_on TEXT NOT NULL DEFAULT '';
+    )sql",
 };
 
 static_assert(std::size(kMigrations) == kSchemaVersion,
@@ -121,6 +142,33 @@ std::string trimmed(const std::string& s)
     if (first == std::string::npos) return {};
     const auto last = s.find_last_not_of(" \t\r\n");
     return s.substr(first, last - first + 1);
+}
+
+// Columns read by readAccountRow(), in order.
+constexpr const char* kAccountColumns =
+    "id, case_id, institution, account_type, last_four, institution_display, is_combined,"
+    " opened_on, closed_on";
+
+std::string foldKey(const std::string& s) { return caseFoldKey(pathFromUtf8(s)); }
+
+// Dates are stored as "YYYY-MM-DD"; '' means not set.
+std::string dateToText(const std::optional<std::chrono::year_month_day>& d)
+{
+    if (!d) return {};
+    char buf[16];
+    std::snprintf(buf, sizeof buf, "%04d-%02u-%02u", static_cast<int>(d->year()),
+                  static_cast<unsigned>(d->month()), static_cast<unsigned>(d->day()));
+    return buf;
+}
+
+std::optional<std::chrono::year_month_day> textToDate(const std::string& text)
+{
+    int y = 0;
+    unsigned m = 0, d = 0;
+    if (std::sscanf(text.c_str(), "%4d-%2u-%2u", &y, &m, &d) != 3) return std::nullopt;
+    const auto date = makeDate(y, m, d);
+    if (!date.ok()) return std::nullopt;
+    return date;
 }
 
 // A blank institution display name is stored as the institution itself.
@@ -222,8 +270,50 @@ struct Database::Impl {
         return db.getLastInsertRowid();
     }
 
+    void validateOwners(const AccountRecord& a)
+    {
+        std::set<std::int64_t> seen;
+        for (const auto id : a.ownerIds) {
+            if (!seen.insert(id).second)
+                throw DatabaseError("The same person is listed twice as an owner.");
+
+            SQLite::Statement q(db, "SELECT case_id FROM people WHERE id = ?");
+            q.bind(1, id);
+            if (!q.executeStep()) throw DatabaseError("An owner no longer exists.");
+            if (q.getColumn(0).getInt64() != a.caseId)
+                throw DatabaseError("An owner belongs to a different case.");
+        }
+    }
+
+    void validateCombined(const AccountRecord& a)
+    {
+        if (a.memberIds.size() < 2) throw DatabaseError("A combined statement needs at least two accounts.");
+        std::set<std::int64_t> seen;
+        std::string institution;
+        for (const auto id : a.memberIds) {
+            if (!seen.insert(id).second) throw DatabaseError("The same account is listed twice.");
+            const auto m = getRecord(id);
+            if (!m || id == a.id) throw DatabaseError("An account on the statement no longer exists.");
+            if (m->caseId != a.caseId) throw DatabaseError("An account on the statement belongs to a different case.");
+            if (m->isCombined())
+                throw DatabaseError("A combined statement can't include another combined statement.");
+            if (institution.empty()) institution = m->institution;
+            else if (foldKey(trimmed(m->institution)) != foldKey(trimmed(institution)))
+                throw DatabaseError("All accounts on a combined statement must be at the same institution (" +
+                                    institution + " and " + m->institution + ").");
+        }
+        validateOwners(a);
+    }
+
     void validate(const AccountRecord& a)
     {
+        if (a.isCombined()) return validateCombined(a);
+
+        for (const auto& d : {a.openedOn, a.closedOn})
+            if (d && !d->ok()) throw DatabaseError("An opening or closing date isn't a real date.");
+        if (a.openedOn && a.closedOn && *a.closedOn < *a.openedOn)
+            throw DatabaseError("The account is closed before it was opened. Check the Opened on and Closed on dates.");
+
         Account probe;
         probe.institution = a.institution;
         probe.accountType = a.accountType;
@@ -237,18 +327,72 @@ struct Database::Impl {
             if (!numbers.insert(caseFoldKey(pathFromUtf8(clean))).second)
                 throw DatabaseError("The number " + clean + " is listed more than once.");
         }
+        validateOwners(a);
+    }
 
-        std::set<std::int64_t> seen;
-        for (const auto id : a.ownerIds) {
-            if (!seen.insert(id).second)
-                throw DatabaseError("The same person is listed twice as an owner.");
+    void writeMembers(std::int64_t combinedId, const std::vector<std::int64_t>& memberIds)
+    {
+        SQLite::Statement del(db, "DELETE FROM combined_members WHERE combined_id = ?");
+        del.bind(1, combinedId);
+        del.exec();
 
-            SQLite::Statement q(db, "SELECT case_id FROM people WHERE id = ?");
-            q.bind(1, id);
-            if (!q.executeStep()) throw DatabaseError("An owner no longer exists.");
-            if (q.getColumn(0).getInt64() != a.caseId)
-                throw DatabaseError("An owner belongs to a different case.");
+        SQLite::Statement ins(db,
+            "INSERT INTO combined_members (combined_id, account_id, position) VALUES (?, ?, ?)");
+        int position = 0;
+        for (const auto id : memberIds) {
+            ins.bind(1, combinedId);
+            ins.bind(2, id);
+            ins.bind(3, position++);
+            ins.exec();
+            ins.reset();
         }
+    }
+
+    std::vector<std::int64_t> membersOf(std::int64_t combinedId)
+    {
+        SQLite::Statement q(db,
+            "SELECT account_id FROM combined_members WHERE combined_id = ? ORDER BY position");
+        q.bind(1, combinedId);
+        std::vector<std::int64_t> ids;
+        while (q.executeStep()) ids.push_back(q.getColumn(0).getInt64());
+        return ids;
+    }
+
+    // Combined statements that include this account.
+    std::vector<std::int64_t> combinedContaining(std::int64_t accountId)
+    {
+        SQLite::Statement q(db, "SELECT combined_id FROM combined_members WHERE account_id = ?");
+        q.bind(1, accountId);
+        std::vector<std::int64_t> ids;
+        while (q.executeStep()) ids.push_back(q.getColumn(0).getInt64());
+        return ids;
+    }
+
+    // Owners, previous numbers and members, plus (for a combined statement)
+    // the institution of its first account.
+    void completeRecord(AccountRecord& a, bool combined)
+    {
+        a.ownerIds = ownersOf(a.id);
+        a.previousLastFour = previousOf(a.id);
+        if (!combined) return;
+        a.memberIds = membersOf(a.id);
+        if (a.memberIds.empty()) return;
+        SQLite::Statement q(db, "SELECT institution, institution_display FROM accounts WHERE id = ?");
+        q.bind(1, a.memberIds.front());
+        if (q.executeStep()) {
+            a.institution = q.getColumn(0).getString();
+            a.institutionDisplay = q.getColumn(1).getString();
+        }
+    }
+
+    std::optional<AccountRecord> getRecord(std::int64_t accountId)
+    {
+        SQLite::Statement q(db, std::string("SELECT ") + kAccountColumns + " FROM accounts WHERE id = ?");
+        q.bind(1, accountId);
+        if (!q.executeStep()) return std::nullopt;
+        AccountRecord a = readAccountRow(q);
+        completeRecord(a, q.getColumn(6).getInt() != 0);
+        return a;
     }
 
     void writeOwners(std::int64_t accountId, const std::vector<std::int64_t>& ownerIds)
@@ -318,6 +462,10 @@ struct Database::Impl {
         a.accountType = r.accountType;
         a.lastFour = r.lastFour;
         a.previousLastFour = r.previousLastFour;
+        a.openedOn = r.openedOn;
+        a.closedOn = r.closedOn;
+        for (const auto memberId : r.memberIds)
+            if (const auto m = getRecord(memberId)) a.combined.push_back({m->id, m->accountType, m->lastFour});
 
         SQLite::Statement names(db, R"sql(
             SELECT p.display_name FROM account_owners o JOIN people p ON p.id = o.person_id
@@ -329,20 +477,46 @@ struct Database::Impl {
 
     std::optional<Account> loadAccount(std::int64_t accountId)
     {
-        SQLite::Statement q(db,
-            "SELECT id, case_id, institution, account_type, last_four, institution_display"
-            " FROM accounts WHERE id = ?");
-        q.bind(1, accountId);
-        if (!q.executeStep()) return std::nullopt;
-        AccountRecord r = readAccountRow(q);
-        r.previousLastFour = previousOf(r.id);
-        return toAccount(r);
+        const auto r = getRecord(accountId);
+        if (!r) return std::nullopt;
+        return toAccount(*r);
+    }
+
+    std::vector<Account> loadAccounts(const std::vector<std::int64_t>& ids)
+    {
+        std::vector<Account> out;
+        for (const auto id : ids)
+            if (auto a = loadAccount(id)) out.push_back(std::move(*a));
+        return out;
+    }
+
+    // An edit to `memberId` changed combined statement `before` into `after`.
+    // A member that only got a newer number (its old one is still one of its
+    // numbers) leaves older statements correctly named, as with a single
+    // account; only the folder moves to the new name then.
+    void recordMemberChange(const Account& before, const Account& after, std::int64_t memberId,
+                            const std::string& oldNumber, const Database::NumberCorrections& corrections)
+    {
+        std::string target = oldNumber;
+        for (const auto& [from, to] : corrections)
+            if (foldKey(from) == foldKey(oldNumber)) target = to;
+
+        bool stillHas = false;
+        if (const auto m = getRecord(memberId)) {
+            stillHas = foldKey(m->lastFour) == foldKey(target);
+            for (const auto& n : m->previousLastFour) stillHas = stillHas || foldKey(n) == foldKey(target);
+        }
+        Account withOldNumber = after;
+        for (CombinedPart& p : withOldNumber.combined)
+            if (p.accountId == memberId) p.lastFour = target;
+        const bool onlyNewerNumber = stillHas && accountLabel(withOldNumber) == accountLabel(before);
+        recordOldNames(before, after, {}, onlyNewerNumber);
     }
 
     // Remembers every file/folder name `before` produced that `after` no longer
     // produces, so files named the old way can be found and fixed later.
     void recordOldNames(const Account& before, const Account& after,
-                        const Database::NumberCorrections& corrections = {})
+                        const Database::NumberCorrections& corrections = {}, bool folderOnly = false)
     {
         // The number files with an old name should use from now on: the corrected
         // text if this edit fixed a typo in it, otherwise the same number (the
@@ -373,8 +547,9 @@ struct Database::Impl {
             ins.reset();
         };
 
-        for (const auto& [name, number] : fileNames(before))
-            if (!current.count(caseFoldKey(pathFromUtf8(name)))) record(false, name, targetNumber(number));
+        if (!folderOnly)
+            for (const auto& [name, number] : fileNames(before))
+                if (!current.count(caseFoldKey(pathFromUtf8(name)))) record(false, name, targetNumber(number));
 
         const std::string oldFolder = accountFolderLabel(before);
         if (caseFoldKey(pathFromUtf8(oldFolder)) != caseFoldKey(pathFromUtf8(accountFolderLabel(after))))
@@ -390,6 +565,8 @@ struct Database::Impl {
         a.accountType = q.getColumn(3).getString();
         a.lastFour = q.getColumn(4).getString();
         a.institutionDisplay = q.getColumn(5).getString();
+        a.openedOn = textToDate(q.getColumn(7).getString());
+        a.closedOn = textToDate(q.getColumn(8).getString());
         return a;
     }
 };
@@ -525,18 +702,15 @@ void Database::updatePerson(std::int64_t personId, const std::string& fullName,
 
 void Database::deletePerson(std::int64_t personId)
 {
-    SQLite::Statement owned(impl_->db, R"sql(
-        SELECT a.institution, a.account_type, a.last_four
-        FROM account_owners o JOIN accounts a ON a.id = o.account_id
-        WHERE o.person_id = ?
-        ORDER BY a.institution, a.account_type, a.last_four)sql");
+    SQLite::Statement owned(impl_->db, "SELECT account_id FROM account_owners WHERE person_id = ?");
     owned.bind(1, personId);
+    std::vector<std::int64_t> ids;
+    while (owned.executeStep()) ids.push_back(owned.getColumn(0).getInt64());
 
     std::string accounts;
-    while (owned.executeStep()) {
-        if (!accounts.empty()) accounts += ", ";
-        accounts += owned.getColumn(0).getString() + ' ' + owned.getColumn(1).getString() + ' ' +
-                    owned.getColumn(2).getString();
+    for (const Account& a : impl_->loadAccounts(ids)) {
+        if (!accounts.empty()) accounts += "; ";
+        accounts += accountLabel(a);
     }
     if (!accounts.empty())
         throw DatabaseError("This person is an owner of: " + accounts +
@@ -566,19 +740,25 @@ std::int64_t Database::createAccount(const AccountRecord& a)
     impl_->requireCase(a.caseId);
     impl_->validate(a);
 
+    const bool combined = a.isCombined();
     SQLite::Transaction tx(impl_->db);
     SQLite::Statement q(impl_->db,
-        "INSERT INTO accounts (case_id, institution, account_type, last_four, institution_display)"
-        " VALUES (?, ?, ?, ?, ?)");
+        "INSERT INTO accounts (case_id, institution, account_type, last_four, institution_display, is_combined,"
+        " opened_on, closed_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
     q.bind(1, a.caseId);
-    q.bind(2, trimmed(a.institution));
-    q.bind(3, trimmed(a.accountType));
-    q.bind(4, trimmed(a.lastFour));
-    q.bind(5, institutionDisplayOrDefault(a));
+    // A combined statement's institution and accounts come from its members.
+    q.bind(2, combined ? std::string() : trimmed(a.institution));
+    q.bind(3, combined ? std::string() : trimmed(a.accountType));
+    q.bind(4, combined ? std::string() : trimmed(a.lastFour));
+    q.bind(5, combined ? std::string() : institutionDisplayOrDefault(a));
+    q.bind(6, combined ? 1 : 0);
+    q.bind(7, combined ? std::string() : dateToText(a.openedOn));
+    q.bind(8, combined ? std::string() : dateToText(a.closedOn));
     q.exec();
     const std::int64_t id = impl_->db.getLastInsertRowid();
     impl_->writeOwners(id, a.ownerIds);
-    impl_->writePreviousNumbers(id, a.previousLastFour);
+    if (combined) impl_->writeMembers(id, a.memberIds);
+    else impl_->writePreviousNumbers(id, a.previousLastFour);
     tx.commit();
     return id;
 }
@@ -588,29 +768,58 @@ void Database::updateAccount(const AccountRecord& a, const NumberCorrections& nu
     const auto existing = getAccount(a.id);
     if (!existing) throw DatabaseError("That account no longer exists.");
 
+    if (existing->isCombined() != a.isCombined())
+        throw DatabaseError("A combined statement can't be changed into a single account, or the other way round.");
+
     AccountRecord checked = a;
     checked.caseId = existing->caseId;  // accounts never move between cases
     impl_->validate(checked);
 
     SQLite::Transaction tx(impl_->db);
     const std::optional<Account> before = impl_->loadAccount(a.id);
+    if (a.isCombined()) {
+        impl_->writeOwners(a.id, a.ownerIds);
+        impl_->writeMembers(a.id, a.memberIds);
+        if (before) impl_->recordOldNames(*before, *impl_->loadAccount(a.id));
+        tx.commit();
+        return;
+    }
+
+    // This account's type, number, institution... also appear in the names of
+    // the combined statements it is on.
+    const std::vector<Account> combinedBefore = impl_->loadAccounts(impl_->combinedContaining(a.id));
+
     SQLite::Statement q(impl_->db,
-        "UPDATE accounts SET institution = ?, account_type = ?, last_four = ?, institution_display = ?"
-        " WHERE id = ?");
+        "UPDATE accounts SET institution = ?, account_type = ?, last_four = ?, institution_display = ?,"
+        " opened_on = ?, closed_on = ? WHERE id = ?");
     q.bind(1, trimmed(a.institution));
     q.bind(2, trimmed(a.accountType));
     q.bind(3, trimmed(a.lastFour));
     q.bind(4, institutionDisplayOrDefault(a));
-    q.bind(5, a.id);
+    q.bind(5, dateToText(a.openedOn));
+    q.bind(6, dateToText(a.closedOn));
+    q.bind(7, a.id);
     q.exec();
     impl_->writeOwners(a.id, a.ownerIds);
     impl_->writePreviousNumbers(a.id, a.previousLastFour);
     if (before) impl_->recordOldNames(*before, *impl_->loadAccount(a.id), numberCorrections);
+    for (const Account& c : combinedBefore)
+        impl_->recordMemberChange(c, *impl_->loadAccount(c.id), a.id, before ? before->lastFour : std::string(),
+                                  numberCorrections);
     tx.commit();
 }
 
 void Database::deleteAccount(std::int64_t accountId)
 {
+    std::string statements;
+    for (const Account& c : impl_->loadAccounts(impl_->combinedContaining(accountId))) {
+        if (!statements.empty()) statements += "; ";
+        statements += "\"" + accountLabel(c) + "\"";
+    }
+    if (!statements.empty())
+        throw DatabaseError("This account is on the combined statement " + statements +
+                            ". Remove it from that statement (or delete the statement) first.");
+
     SQLite::Statement q(impl_->db, "DELETE FROM accounts WHERE id = ?");
     q.bind(1, accountId);
     q.exec();
@@ -618,30 +827,30 @@ void Database::deleteAccount(std::int64_t accountId)
 
 std::optional<AccountRecord> Database::getAccount(std::int64_t accountId) const
 {
-    SQLite::Statement q(impl_->db,
-        "SELECT id, case_id, institution, account_type, last_four, institution_display"
-        " FROM accounts WHERE id = ?");
-    q.bind(1, accountId);
-    if (!q.executeStep()) return std::nullopt;
-    AccountRecord a = Impl::readAccountRow(q);
-    a.ownerIds = impl_->ownersOf(a.id);
-    a.previousLastFour = impl_->previousOf(a.id);
-    return a;
+    return impl_->getRecord(accountId);
 }
 
 std::vector<AccountRecord> Database::listAccountRecords(std::int64_t caseId) const
 {
-    SQLite::Statement q(impl_->db, R"sql(
-        SELECT id, case_id, institution, account_type, last_four, institution_display FROM accounts
+    SQLite::Statement q(impl_->db, std::string("SELECT ") + kAccountColumns + R"sql( FROM accounts
         WHERE case_id = ?
         ORDER BY institution COLLATE NOCASE, account_type COLLATE NOCASE, last_four, id)sql");
     q.bind(1, caseId);
+    std::vector<std::pair<AccountRecord, bool>> rows;
+    while (q.executeStep()) rows.push_back({Impl::readAccountRow(q), q.getColumn(6).getInt() != 0});
+
     std::vector<AccountRecord> out;
-    while (q.executeStep()) out.push_back(Impl::readAccountRow(q));
-    for (auto& a : out) {
-        a.ownerIds = impl_->ownersOf(a.id);
-        a.previousLastFour = impl_->previousOf(a.id);
+    for (auto& [a, combined] : rows) {
+        impl_->completeRecord(a, combined);
+        out.push_back(std::move(a));
     }
+    // Combined statements (stored without an institution) go after their
+    // institution's accounts.
+    std::stable_sort(out.begin(), out.end(), [](const AccountRecord& x, const AccountRecord& y) {
+        const std::string kx = foldKey(x.institution), ky = foldKey(y.institution);
+        if (kx != ky) return kx < ky;
+        return !x.isCombined() && y.isCombined();
+    });
     return out;
 }
 
@@ -670,7 +879,7 @@ std::vector<OldAccountName> Database::oldAccountNames(std::int64_t caseId) const
 std::vector<std::string> Database::accountTypeSuggestions() const
 {
     SQLite::Statement q(impl_->db, R"sql(
-        SELECT MIN(account_type) FROM accounts
+        SELECT MIN(account_type) FROM accounts WHERE is_combined = 0
         GROUP BY account_type COLLATE NOCASE
         ORDER BY 1 COLLATE NOCASE)sql");
     std::vector<std::string> out;
@@ -683,8 +892,9 @@ std::vector<InstitutionName> Database::institutionSuggestions() const
     // One row per institution (ignoring letter case): the most recently added account's.
     SQLite::Statement q(impl_->db, R"sql(
         SELECT a.institution, a.institution_display FROM accounts a
-        WHERE a.id = (SELECT MAX(b.id) FROM accounts b
-                      WHERE b.institution = a.institution COLLATE NOCASE)
+        WHERE a.is_combined = 0
+          AND a.id = (SELECT MAX(b.id) FROM accounts b
+                      WHERE b.is_combined = 0 AND b.institution = a.institution COLLATE NOCASE)
         ORDER BY a.institution COLLATE NOCASE)sql");
     std::vector<InstitutionName> out;
     while (q.executeStep())

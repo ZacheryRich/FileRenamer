@@ -35,13 +35,13 @@ TEST_CASE("A new database is created at the current schema version")
     const fs::path file = dir.path() / "finrenamer.db";
     {
         Database db(file);
-        CHECK(db.schemaVersion() == 4);
+        CHECK(db.schemaVersion() == 6);
         db.createCase({0, "Persisted", ""});
     }
     CHECK(fs::exists(file));
 
     Database reopened(file);  // reopening must not re-run migrations
-    CHECK(reopened.schemaVersion() == 4);
+    CHECK(reopened.schemaVersion() == 6);
     REQUIRE(reopened.listCases().size() == 1);
     CHECK(reopened.listCases()[0].clientName == "Persisted");
 }
@@ -343,7 +343,7 @@ TEST_CASE("A version 1 database is upgraded and keeps its data")
     }
 
     Database db(file);
-    CHECK(db.schemaVersion() == 4);
+    CHECK(db.schemaVersion() == 6);
     const auto people = db.listPeople(1);
     REQUIRE(people.size() == 1);
     CHECK(people[0].displayName == "José Núñez");
@@ -448,4 +448,233 @@ TEST_CASE("Edits that change names are remembered as old names")
     const auto count = s.db.oldAccountNames(s.caseId).size();
     s.db.updateAccount(*s.db.getAccount(id));
     CHECK(s.db.oldAccountNames(s.caseId).size() == count);
+}
+
+// ---- Combined statements ---------------------------------------------------
+
+TEST_CASE("Combined statements are saved and named from their accounts")
+{
+    SmithCase s;
+    const auto chk = s.db.createAccount({0, s.caseId, "JPMorgan Chase", "Chase", "Chk", "1111", {s.john}});
+    const auto sav = s.db.createAccount({0, s.caseId, "JPMorgan Chase", "Chase", "Sav", "2222", {s.jane}});
+    const auto chk2 = s.addAccount("JPMorgan Chase", "Chk", "3333", {});
+    s.addAccount("Ally", "Savings", "9999", {});
+
+    AccountRecord c;
+    c.caseId = s.caseId;
+    c.ownerIds = {s.jane, s.john};
+    c.memberIds = {chk, sav, chk2};
+    const auto id = s.db.createAccount(c);
+
+    const auto rec = s.db.getAccount(id);
+    REQUIRE(rec);
+    CHECK(rec->isCombined());
+    CHECK(rec->memberIds == std::vector<std::int64_t>{chk, sav, chk2});
+    CHECK(rec->institution == "JPMorgan Chase");  // from its accounts, for display
+    CHECK(rec->ownerIds == std::vector<std::int64_t>{s.jane, s.john});
+
+    const auto accounts = s.db.loadAccounts(s.caseId);
+    REQUIRE(accounts.size() == 5);
+    CHECK(accountLabel(accounts[0]) == "Ally Savings 9999");
+    const Account& combined = accounts.back();  // after the institution's own accounts
+    REQUIRE(combined.isCombined());
+    CHECK(accountLabel(combined) == "Chase Chk x1111, Sav x2222, Chk x3333 (Jane Smith; John Smith)");
+    CHECK(accountFolderLabel(combined) == accountLabel(combined));
+
+    // Reorder and drop one.
+    c.id = id;
+    c.memberIds = {sav, chk};
+    c.ownerIds = {s.john};
+    s.db.updateAccount(c);
+    CHECK(accountLabel(s.db.loadAccounts(s.caseId).back()) == "Chase Sav x2222, Chk x1111 (John Smith)");
+
+    // Combined statements don't feed the type/institution suggestions.
+    for (const auto& t : s.db.accountTypeSuggestions()) CHECK_FALSE(t.empty());
+    for (const auto& i : s.db.institutionSuggestions()) CHECK_FALSE(i.institution.empty());
+}
+
+TEST_CASE("Combined statement rules")
+{
+    SmithCase s;
+    const auto chk = s.addAccount("Chase", "Chk", "1111", {});
+    const auto sav = s.addAccount("chase", "Sav", "2222", {});  // same institution, any case
+    const auto ally = s.addAccount("Ally", "Savings", "9999", {});
+
+    AccountRecord c;
+    c.caseId = s.caseId;
+    c.memberIds = {chk};
+    CHECK_THROWS_WITH(s.db.createAccount(c), ContainsSubstring("at least two"));
+    c.memberIds = {chk, chk};
+    CHECK_THROWS_WITH(s.db.createAccount(c), ContainsSubstring("listed twice"));
+    c.memberIds = {chk, ally};
+    CHECK_THROWS_WITH(s.db.createAccount(c), ContainsSubstring("same institution"));
+
+    const auto other = s.db.createCase({0, "Other", ""});
+    const auto foreign = s.db.createAccount({0, other, "Chase", "", "Chk", "4444", {}});
+    c.memberIds = {chk, foreign};
+    CHECK_THROWS_WITH(s.db.createAccount(c), ContainsSubstring("different case"));
+
+    c.memberIds = {chk, sav};
+    const auto id = s.db.createAccount(c);
+    c.memberIds = {id, chk};
+    CHECK_THROWS_WITH(s.db.createAccount(c), ContainsSubstring("another combined statement"));
+
+    // A single account can't become a combined statement or the reverse.
+    AccountRecord single = *s.db.getAccount(chk);
+    single.memberIds = {sav, ally};
+    CHECK_THROWS_WITH(s.db.updateAccount(single), ContainsSubstring("can't be changed"));
+
+    // An account on a statement can't be deleted; the statement can.
+    CHECK_THROWS_WITH(s.db.deleteAccount(sav), ContainsSubstring("Chase Chk x1111, Sav x2222"));
+    s.db.deleteAccount(id);
+    s.db.deleteAccount(sav);
+    CHECK(s.db.loadAccounts(s.caseId).size() == 2);
+
+    // Deleting the whole case is fine.
+    c.memberIds = {chk, s.addAccount("Chase", "Sav", "5555", {})};
+    s.db.createAccount(c);
+    s.db.deleteCase(s.caseId);
+    CHECK(s.db.listAccountRecords(s.caseId).empty());
+}
+
+TEST_CASE("Editing an account records old names of its combined statements")
+{
+    SmithCase s;
+    const auto chk = s.addAccount("Chase", "Chekcing", "1111", {});
+    const auto sav = s.addAccount("Chase", "Savings", "2222", {});
+    AccountRecord c;
+    c.caseId = s.caseId;
+    c.ownerIds = {s.john};
+    c.memberIds = {chk, sav};
+    const auto id = s.db.createAccount(c);
+
+    auto namesOf = [&](std::int64_t accountId) {
+        std::vector<std::pair<bool, std::string>> out;
+        for (const auto& o : s.db.oldAccountNames(s.caseId))
+            if (o.accountId == accountId) out.push_back({o.isFolder, o.name});
+        return out;
+    };
+
+    // A typo in a member's type: files and the folder were named the old way.
+    AccountRecord r = *s.db.getAccount(chk);
+    r.accountType = "Checking";
+    s.db.updateAccount(r);
+    const std::vector<std::pair<bool, std::string>> typo{
+        {false, "Chase Chekcing x1111, Savings x2222 (John Smith)"},
+        {true, "Chase Chekcing x1111, Savings x2222 (John Smith)"}};
+    CHECK(namesOf(id) == typo);
+
+    // The savings account gets a newer number: older statements still show
+    // 2222 and keep their names; only the folder takes the new name.
+    r = *s.db.getAccount(sav);
+    r.previousLastFour = {r.lastFour};
+    r.lastFour = "7777";
+    s.db.updateAccount(r);
+    auto names = namesOf(id);
+    REQUIRE(names.size() == 3);
+    CHECK(names[2] == std::pair<bool, std::string>{true, "Chase Checking x1111, Savings x2222 (John Smith)"});
+
+    // Renaming an owner of the statement.
+    s.db.updatePerson(s.john, "John Smith", "H");
+    names = namesOf(id);
+    REQUIRE(names.size() == 5);
+    CHECK(names[3].second == "Chase Checking x1111, Savings x7777 (John Smith)");
+}
+
+TEST_CASE("A version 4 database is upgraded to combined statements")
+{
+    testing::TempDir dir;
+    const fs::path file = dir.path() / "v4.db";
+    {
+        Database created(file);  // today's schema...
+    }
+    {
+        // ...turned back into version 4.
+        SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
+        old.exec(R"sql(
+            DROP TABLE combined_members;
+            ALTER TABLE accounts DROP COLUMN is_combined;
+            ALTER TABLE accounts DROP COLUMN opened_on;
+            ALTER TABLE accounts DROP COLUMN closed_on;
+            INSERT INTO cases (id, client_name) VALUES (1, 'Old Case');
+            INSERT INTO accounts (id, case_id, institution, account_type, last_four, institution_display)
+                VALUES (1, 1, 'Chase', 'Checking', '1234', 'Chase');
+            PRAGMA user_version = 4;
+        )sql");
+    }
+    Database db(file);
+    CHECK(db.schemaVersion() == 6);
+    REQUIRE(db.loadAccounts(1).size() == 1);
+    CHECK_FALSE(db.loadAccounts(1)[0].isCombined());
+    const auto sav = db.createAccount({0, 1, "Chase", "", "Savings", "5678", {}});
+    AccountRecord c;
+    c.caseId = 1;
+    c.memberIds = {1, sav};
+    db.createAccount(c);
+    CHECK(accountLabel(db.loadAccounts(1).back()) == "Chase Checking x1234, Savings x5678");
+}
+
+// ---- Opening and closing dates ----------------------------------------------
+
+TEST_CASE("Accounts keep optional opening and closing dates")
+{
+    SmithCase s;
+    AccountRecord a{0, s.caseId, "Chase", "", "Checking", "1234", {s.john}};
+    CHECK_FALSE(s.db.getAccount(s.db.createAccount(a))->openedOn);  // both optional
+
+    a.openedOn = makeDate(2022, 3, 15);
+    a.closedOn = makeDate(2024, 11, 2);
+    a.lastFour = "5678";
+    const auto id = s.db.createAccount(a);
+    auto r = *s.db.getAccount(id);
+    CHECK(r.openedOn == makeDate(2022, 3, 15));
+    CHECK(r.closedOn == makeDate(2024, 11, 2));
+    for (const Account& loaded : s.db.loadAccounts(s.caseId))
+        if (loaded.id == id) {
+            CHECK(loaded.openedOn == makeDate(2022, 3, 15));
+            CHECK(loaded.closedOn == makeDate(2024, 11, 2));
+        }
+
+    // Clear one, change the other. Dates don't change any file or folder name.
+    r.closedOn.reset();
+    r.openedOn = makeDate(2022, 1, 1);
+    s.db.updateAccount(r);
+    r = *s.db.getAccount(id);
+    CHECK(r.openedOn == makeDate(2022, 1, 1));
+    CHECK_FALSE(r.closedOn);
+    CHECK(s.db.oldAccountNames(s.caseId).empty());
+
+    // Closed before opened is refused (same day is fine).
+    r.closedOn = makeDate(2021, 12, 31);
+    CHECK_THROWS_WITH(s.db.updateAccount(r), ContainsSubstring("closed before it was opened"));
+    r.closedOn = makeDate(2022, 1, 1);
+    CHECK_NOTHROW(s.db.updateAccount(r));
+}
+
+TEST_CASE("A version 5 database is upgraded to opening and closing dates")
+{
+    testing::TempDir dir;
+    const fs::path file = dir.path() / "v5.db";
+    {
+        Database created(file);
+    }
+    {
+        SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
+        old.exec(R"sql(
+            ALTER TABLE accounts DROP COLUMN opened_on;
+            ALTER TABLE accounts DROP COLUMN closed_on;
+            INSERT INTO cases (id, client_name) VALUES (1, 'Old Case');
+            INSERT INTO accounts (id, case_id, institution, account_type, last_four, institution_display, is_combined)
+                VALUES (1, 1, 'Chase', 'Checking', '1234', 'Chase', 0);
+            PRAGMA user_version = 5;
+        )sql");
+    }
+    Database db(file);
+    CHECK(db.schemaVersion() == 6);
+    auto r = *db.getAccount(1);
+    CHECK_FALSE(r.openedOn);
+    CHECK_FALSE(r.closedOn);
+    r.openedOn = makeDate(2020, 6, 1);
+    db.updateAccount(r);
+    CHECK(db.getAccount(1)->openedOn == makeDate(2020, 6, 1));
 }

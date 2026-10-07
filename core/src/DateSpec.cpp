@@ -32,6 +32,46 @@ std::chrono::year_month_day makeDate(int year, unsigned month, unsigned day)
                                        std::chrono::day{day}};
 }
 
+namespace {
+
+std::optional<int> readDigits(std::string_view s, std::size_t pos, std::size_t count)
+{
+    if (pos + count > s.size()) return std::nullopt;
+    int value = 0;
+    for (std::size_t i = pos; i < pos + count; ++i) {
+        if (s[i] < '0' || s[i] > '9') return std::nullopt;
+        value = value * 10 + (s[i] - '0');
+    }
+    return value;
+}
+
+// "YYYY.MM.DD" starting at `pos`.
+std::optional<std::chrono::year_month_day> readYmd(std::string_view s, std::size_t pos)
+{
+    if (pos + 10 > s.size() || s[pos + 4] != '.' || s[pos + 7] != '.') return std::nullopt;
+    const auto y = readDigits(s, pos, 4), m = readDigits(s, pos + 5, 2), d = readDigits(s, pos + 8, 2);
+    if (!y || !m || !d) return std::nullopt;
+    return makeDate(*y, static_cast<unsigned>(*m), static_cast<unsigned>(*d));
+}
+
+}  // namespace
+
+std::optional<DateSpec> parseDateSpec(std::string_view text)
+{
+    std::optional<DateSpec> spec;
+    if (text.size() == 7 && text[4] == '.' && text[5] == 'Q') {
+        const auto y = readDigits(text, 0, 4), q = readDigits(text, 6, 1);
+        if (y && q) spec = Quarter{*y, *q};
+    } else if (text.size() == 10) {
+        if (const auto d = readYmd(text, 0)) spec = SingleDate{*d};
+    } else if (text.size() == 23 && text.substr(10, 3) == " - ") {
+        const auto a = readYmd(text, 0), b = readYmd(text, 13);
+        if (a && b) spec = Period{*a, *b};
+    }
+    if (!spec || validateDateSpec(*spec)) return std::nullopt;
+    return spec;
+}
+
 std::string formatDateSpec(const DateSpec& spec)
 {
     return std::visit(Overloaded{

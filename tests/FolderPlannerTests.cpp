@@ -47,3 +47,16 @@ TEST_CASE("Account folders list previous numbers")
     CHECK(subfolderFor(a, Quarter{2026, 1}, opts) ==
           fs::path("Fidelity Brokerage 5678 (was x1111) (Jane Smith)"));
 }
+
+TEST_CASE("A combined statement gets its own account folder")
+{
+    Account c;
+    c.institution = "Chase";
+    c.combined = {{1, "Chk", "1111"}, {2, "Sav", "2222"}};
+    c.owners = {"H"};
+    SortOptions o;
+    o.byAccount = true;
+    o.byYear = true;
+    CHECK(subfolderFor(c, SingleDate{makeDate(2026, 1, 31)}, o) ==
+          std::filesystem::path("Chase Chk x1111, Sav x2222 (H)") / "2026");
+}

@@ -30,6 +30,10 @@ std::chrono::year_month_day makeDate(int year, unsigned month, unsigned day);
 // "2026.01.31", "2026.01.01 - 2026.01.31", "2026.Q1"
 std::string formatDateSpec(const DateSpec& spec);
 
+// The inverse of formatDateSpec: reads "2026.01.31", "2026.01.01 - 2026.01.31"
+// or "2026.Q1". Returns nullopt for anything else, including impossible dates.
+std::optional<DateSpec> parseDateSpec(std::string_view text);
+
 // Year used for year subfolders. Periods use the END date's year.
 int filingYear(const DateSpec& spec);
 

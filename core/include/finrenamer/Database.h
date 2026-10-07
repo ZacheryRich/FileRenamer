@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -33,6 +34,17 @@ struct AccountRecord {
     std::string lastFour;
     std::vector<std::int64_t> ownerIds;
     std::vector<std::string> previousLastFour;  // older numbers of this same account, newest first
+    // Non-empty for a combined statement: the accounts it covers, in name order
+    // (at least two, same institution, same case). institution/accountType/
+    // lastFour are then ignored when saving; when loading, institution and
+    // institutionDisplay are filled in from the first account for display.
+    std::vector<std::int64_t> memberIds;
+    // Optional dates for single accounts (ignored for combined statements).
+    // The closing date can't be before the opening date.
+    std::optional<std::chrono::year_month_day> openedOn;
+    std::optional<std::chrono::year_month_day> closedOn;
+
+    bool isCombined() const { return !memberIds.empty(); }
 };
 
 // A person to add when creating a case.
@@ -98,6 +110,7 @@ public:
     std::vector<Person> listPeople(std::int64_t caseId) const;  // in the order they were added
 
     // ---- Accounts -------------------------------------------------------
+    // Accounts and combined statements (AccountRecord::memberIds) share these.
     std::int64_t createAccount(const AccountRecord& a);  // a.id is ignored
     // Replaces owners and numbers too. `numberCorrections` lists numbers whose
     // text was corrected in this edit (old -> new, e.g. a typo "1243" -> "1234"),
@@ -105,13 +118,14 @@ public:
     // added, removed or reordered need no entry.
     using NumberCorrections = std::vector<std::pair<std::string, std::string>>;
     void updateAccount(const AccountRecord& a, const NumberCorrections& numberCorrections = {});
-    void deleteAccount(std::int64_t accountId);
+    void deleteAccount(std::int64_t accountId);  // refused while on a combined statement
     std::optional<AccountRecord> getAccount(std::int64_t accountId) const;
     std::vector<AccountRecord> listAccountRecords(std::int64_t caseId) const;
 
     // Accounts with owners' display names (and previous numbers) filled in,
     // ready for FilenameBuilder/RenamePlan.
-    // Sorted by institution, type, last four.
+    // Sorted by institution, type, last four; an institution's combined
+    // statements come after its accounts.
     std::vector<Account> loadAccounts(std::int64_t caseId) const;
 
     // Every account type used so far, across all cases, for the type field's

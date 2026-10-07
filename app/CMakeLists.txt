@@ -5,10 +5,14 @@ qt_standard_project_setup()  # turns on AUTOMOC (needed for Q_OBJECT classes)
 # link against them without the exe's main().
 qt_add_library(finrenamer_ui STATIC
     QtHelpers.h
+    HomeWindow.h HomeWindow.cpp
+    CasePickerDialog.h CasePickerDialog.cpp
     MainWindow.h MainWindow.cpp
     CaseDialog.h CaseDialog.cpp
     PersonDialog.h PersonDialog.cpp
     AccountDialog.h AccountDialog.cpp
+    CaseFolderList.h CaseFolderList.cpp
+    DeficiencyDialog.h DeficiencyDialog.cpp
     DateWidgets.h DateWidgets.cpp
     HistoryDialog.h HistoryDialog.cpp
     RenameWindow.h RenameWindow.cpp

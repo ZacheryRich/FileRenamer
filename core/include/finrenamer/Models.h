@@ -1,6 +1,8 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,6 +23,13 @@ struct Person {
     std::string displayName;  // "H" -- what appears in filenames
 };
 
+// One account on a combined statement, in the order it appears in the name.
+struct CombinedPart {
+    std::int64_t accountId = 0;
+    std::string accountType;  // "Checking"
+    std::string lastFour;     // the account's current number
+};
+
 // An account as the renaming code sees it. The database layer resolves the
 // account's linked Person rows into `owners` (their display names), already
 // in the order they should appear in filenames.
@@ -36,6 +45,18 @@ struct Account {
     // Shown in the account folder name as "(was x5678, x1234)"; a file can use
     // one of them instead of lastFour (see PlanInput::number).
     std::vector<std::string> previousLastFour;
+    // Non-empty for a combined statement (one PDF covering several accounts at
+    // the same institution): "Chase Checking x1111, Savings x2222 (H)". Then
+    // accountType/lastFour/previousLastFour are empty, `institution`/
+    // `institutionDisplay` are the member accounts' and `owners` are the ones
+    // chosen for the combined statement itself.
+    std::vector<CombinedPart> combined;
+    // Optional. When the account was opened / closed; the Deficiency List doesn't
+    // expect statements before the opening month or after the closing month.
+    std::optional<std::chrono::year_month_day> openedOn;
+    std::optional<std::chrono::year_month_day> closedOn;
+
+    bool isCombined() const { return !combined.empty(); }
 };
 
 // A name an account used to have, before an edit changed it. Lets the

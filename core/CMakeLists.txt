@@ -18,14 +18,19 @@ endif()
 
 add_library(finrenamer_core STATIC
     src/Database.cpp
+    src/DeficiencyReport.cpp
+    src/DocxWriter.cpp
     src/DateSpec.cpp
     src/FilenameBuilder.cpp
     src/FolderPlanner.cpp
     src/FileScanner.cpp
+    src/FolderSearch.cpp
     src/NameFixer.cpp
     src/RenamePlan.cpp
     src/RenameSession.cpp
     src/RenameEngine.cpp
+    src/StatementCoverage.cpp
+    src/StatementNames.cpp
     src/Utf8Path.cpp
 )
 

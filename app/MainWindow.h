@@ -51,6 +51,7 @@ private:
     void deleteAccount();
     void renameFiles();
     void updateFileNames();
+    void deficiencyList();
     std::set<std::string> currentNames();
     void offerNameUpdate(const std::set<std::string>& namesBefore);
 
@@ -69,6 +70,7 @@ private:
     QLabel* caseNotes_ = nullptr;
     QPushButton* renameFilesBtn_ = nullptr;
     QPushButton* updateNamesBtn_ = nullptr;
+    QPushButton* deficiencyBtn_ = nullptr;
 
     QTableWidget* peopleTable_ = nullptr;
     QPushButton* editPersonBtn_ = nullptr;
