@@ -239,6 +239,11 @@ Catch2 3.7.1 (vcpkg if present, else FetchContent from GitHub).
   **Deficiency List**; the last two ask which case via `CasePickerDialog` (last case
   preselected). Closing the start screen quits the app (`quitOnLastWindowClosed` is off).
   objectNames: "caseList", "fileRenamer", "deficiencyList".
+  **Look** (user asked for the start screen and Case List to match the File Renamer):
+  stock Fusion widgets, boxed panels (`QGroupBox`: Cases / People / Accounts), a
+  1.5x bold title, and the File Renamer's footer -- information on the left (data
+  folder, label "dataFolder"), **Close** on the right (button "close"); no
+  `QStatusBar`. Keep new screens in this style.
 - Account dialog objectNames: "statementType", "members", "memberChoice", "addMember", "numbers", "openedOn", "closedOn".
 - Deficiency dialog objectNames: "folders", "subfolders", "fromMonth", "fromYear", "toMonth", "toYear",
   "present", "found", "missing", "accounts", "preview", "summary", "unmatched", "save".

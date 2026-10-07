@@ -14,7 +14,6 @@
 #include <QPushButton>
 #include <QSplitter>
 #include <QStackedWidget>
-#include <QStatusBar>
 #include <QTableWidget>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -89,7 +88,6 @@ MainWindow::MainWindow(Database& db, const QString& dataFolder, QWidget* parent)
     setWindowTitle(tr("Case List - FinRenamer"));
     buildUi();
     buildMenus();
-    statusBar()->showMessage(tr("Data folder: %1").arg(dataFolder_));
     resize(1100, 680);
     reloadCases();
 }
@@ -115,9 +113,9 @@ void MainWindow::buildUi()
     editCaseBtn_ = new QPushButton(tr("Edit"));
     deleteCaseBtn_ = new QPushButton(tr("Delete"));
 
-    auto* left = new QWidget;
+    // Same boxed look as People / Accounts and the File Renamer's panels.
+    auto* left = new QGroupBox(tr("Cases"));
     auto* leftLayout = new QVBoxLayout(left);
-    leftLayout->setContentsMargins(0, 0, 0, 0);
     leftLayout->addWidget(caseFilter_);
     leftLayout->addWidget(caseList_, 1);
     leftLayout->addLayout(buttonRow({newCaseBtn, editCaseBtn_, deleteCaseBtn_}));
@@ -207,7 +205,21 @@ void MainWindow::buildUi()
 
     auto* central = new QWidget;
     auto* centralLayout = new QVBoxLayout(central);
-    centralLayout->addWidget(splitter);
+    centralLayout->addWidget(splitter, 1);
+
+    // Footer like the File Renamer's: information on the left, Close on the right.
+    auto* dataLabel = new QLabel(tr("Data folder: %1").arg(dataFolder_));
+    dataLabel->setObjectName("dataFolder");
+    dataLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    auto* closeBtn = new QPushButton(tr("Close"));
+    closeBtn->setObjectName("close");
+    closeBtn->setToolTip(tr("Back to the start screen"));
+    closeBtn->setAutoDefault(false);
+    connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
+    auto* footer = new QHBoxLayout;
+    footer->addWidget(dataLabel, 1);
+    footer->addWidget(closeBtn);
+    centralLayout->addLayout(footer);
     setCentralWidget(central);
 
     // ---- Wiring ----

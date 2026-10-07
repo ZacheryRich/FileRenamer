@@ -5,7 +5,7 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
-#include <QStatusBar>
+#include <QHBoxLayout>
 #include <QVBoxLayout>
 
 #include "CasePickerDialog.h"
@@ -23,12 +23,9 @@ QPushButton* makeTile(const QString& objectName, const QString& title, const QSt
 {
     auto* button = new QPushButton(QStringLiteral("%1\n%2").arg(title, caption));
     button->setObjectName(objectName);
-    button->setMinimumSize(300, 96);
+    button->setMinimumHeight(64);
     button->setAutoDefault(false);
-    QFont font = button->font();
-    font.setPointSizeF(font.pointSizeF() + 3);
-    button->setFont(font);
-    button->setStyleSheet("QPushButton { text-align: left; padding: 12px 18px; }");
+    button->setStyleSheet("QPushButton { text-align: left; padding: 8px 16px; }");
     return button;
 }
 
@@ -40,10 +37,12 @@ HomeWindow::HomeWindow(Database& db, const QString& dataFolder, QWidget* parent)
     setWindowTitle(tr("FinRenamer"));
 
     auto* heading = new QLabel(tr("FinRenamer"));
-    QFont big = heading->font();
-    big.setPointSizeF(big.pointSizeF() + 12);
+    QFont big = heading->font();  // same title style as the Case List's case name
+    big.setPointSizeF(big.pointSizeF() * 1.5);
     big.setBold(true);
     heading->setFont(big);
+    auto* intro = new QLabel(tr("What would you like to work on?"));
+    intro->setStyleSheet("color: palette(placeholder-text);");
 
     auto* cases = makeTile("caseList", tr("Case List"), tr("Add and edit cases, people and accounts"));
     auto* renamer = makeTile("fileRenamer", tr("File Renamer"), tr("Rename a folder of statements for a case"));
@@ -51,22 +50,32 @@ HomeWindow::HomeWindow(Database& db, const QString& dataFolder, QWidget* parent)
 
     auto* central = new QWidget;
     auto* layout = new QVBoxLayout(central);
-    layout->setContentsMargins(40, 30, 40, 30);
-    layout->setSpacing(14);
     layout->addWidget(heading);
-    layout->addSpacing(8);
+    layout->addWidget(intro);
+    layout->addSpacing(6);
     layout->addWidget(cases);
     layout->addWidget(renamer);
     layout->addWidget(deficiency);
     layout->addStretch();
-    setCentralWidget(central);
 
-    statusBar()->showMessage(tr("Data folder: %1").arg(dataFolder_));
+    // Footer like the File Renamer's: information on the left, Close on the right.
+    auto* dataLabel = new QLabel(tr("Data folder: %1").arg(dataFolder_));
+    dataLabel->setObjectName("dataFolder");
+    dataLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    auto* closeBtn = new QPushButton(tr("Close"));
+    closeBtn->setObjectName("close");
+    closeBtn->setAutoDefault(false);
+    connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
+    auto* footer = new QHBoxLayout;
+    footer->addWidget(dataLabel, 1);
+    footer->addWidget(closeBtn);
+    layout->addLayout(footer);
+    setCentralWidget(central);
 
     connect(cases, &QPushButton::clicked, this, &HomeWindow::openCaseList);
     connect(renamer, &QPushButton::clicked, this, &HomeWindow::openFileRenamer);
     connect(deficiency, &QPushButton::clicked, this, &HomeWindow::openDeficiencyList);
-    resize(500, 440);
+    resize(520, 400);
 }
 
 HomeWindow::~HomeWindow()
