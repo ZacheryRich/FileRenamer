@@ -31,6 +31,7 @@ add_library(finrenamer_core STATIC
     src/RenameEngine.cpp
     src/StatementCoverage.cpp
     src/StatementNames.cpp
+    src/LooseStatementNames.cpp
     src/Utf8Path.cpp
 )
 

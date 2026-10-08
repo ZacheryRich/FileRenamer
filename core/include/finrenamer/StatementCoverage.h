@@ -37,11 +37,15 @@ struct CoverageScan {
     std::size_t pdfCount = 0;
     std::size_t matchedCount = 0;                   // PDFs credited to an account
     std::vector<std::filesystem::path> unmatched;   // PDFs not named like a statement of this case
+    // Matched by the looser reading (LooseNameMatcher): names that aren't in this
+    // program's format but show a date, an account number and the institution or type.
+    std::vector<std::filesystem::path> loose;       // (also counted in matchedCount)
 };
 
-// Reads the names of every PDF in the chosen folders (renamed files only: the
-// date and account come from the name, including names an account used
-// before a fix and files named with an older account number).
+// Reads the names of every PDF in the chosen folders: the date and account come
+// from the name. Names in this program's format come first (including names an
+// account used before a fix and files named with an older account number); any
+// other name is read forgivingly (see LooseNameMatcher).
 CoverageScan scanStatements(const std::vector<std::filesystem::path>& chosenFolders,
                             bool includeSubfolders, const std::vector<Account>& accounts,
                             const std::vector<OldAccountName>& oldNames);

@@ -68,7 +68,10 @@ RenamePlan planNameFixes(const std::vector<fs::path>& rootsIn, const std::vector
     // Folder name -> account. Any label an account has ever had, used as a
     // folder name, is that account's folder.
     std::unordered_map<std::string, const Account*> folderNames;
-    for (const Account& a : accounts) folderNames.emplace(key(accountFolderLabel(a)), &a);
+    for (const Account& a : accounts) {
+        folderNames.emplace(key(accountFolderLabel(a)), &a);
+        folderNames.emplace(key(legacyAccountLabel(a, {}, true)), &a);  // before numbers had an "x"
+    }
     for (const auto& [k, info] : fileLabels.entries()) folderNames.emplace(k, info.account);
     for (const OldAccountName& old : oldNames)
         if (old.isFolder && byId.count(old.accountId)) folderNames.emplace(key(old.name), byId[old.accountId]);

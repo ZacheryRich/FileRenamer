@@ -133,7 +133,7 @@ TEST_CASE("Partial apply renames finished rows and leaves the rest editable")
     REQUIRE(result.record.moves.size() == 1);
 
     CHECK(s.row(0).done);
-    CHECK(s.row(0).path == s.root() / "2026" / "2026.Q1 Fidelity Brokerage 5678 (Jane Smith).pdf");
+    CHECK(s.row(0).path == s.root() / "2026" / "2026.Q1 Fidelity Brokerage x5678 (Jane Smith).pdf");
     CHECK(s.row(0).originalPath.filename() == "scan1.pdf");
     CHECK(testing::readFile(s.row(0).path) == "A");
     CHECK_FALSE(s.row(1).done);
@@ -195,7 +195,7 @@ TEST_CASE("A file that can't be renamed keeps its entries and reports why")
     dir.touch("scan1.pdf");
     // A plain file squatting on the account folder's name: the folder can't be
     // created, so the move fails at Apply time (like a locked PDF would).
-    dir.touch("Fidelity Brokerage 5678 (Jane Smith)", "not a folder");
+    dir.touch("Fidelity Brokerage x5678 (Jane Smith)", "not a folder");
 
     RenameSession s(dir.path(), twoAccounts());
     REQUIRE(s.size() == 1);
@@ -240,7 +240,7 @@ TEST_CASE("undoLast restores files and makes their rows editable again")
     CHECK(s.row(1).path.filename() == "scan2.pdf");
     CHECK(s.row(1).accountId == 2);  // entries kept
     CHECK(s.row(0).done);
-    CHECK_FALSE(fs::exists(dir.path() / "Fidelity Brokerage 5678 (Jane Smith)"));
+    CHECK_FALSE(fs::exists(dir.path() / "Fidelity Brokerage x5678 (Jane Smith)"));
 
     REQUIRE(s.undoLast());
     CHECK(testing::readFile(a) == "A");
@@ -267,9 +267,9 @@ TEST_CASE("A file can use an old number; the folder still shows all numbers")
     PlanOptions opts;
     opts.sort.byAccount = true;
     const auto preview = s.preview(opts);
-    const fs::path folder = s.root() / "Fidelity Brokerage 9012 (was x5678) (Jane Smith)";
-    CHECK(preview[0].destination == folder / "2026.01.31 Fidelity Brokerage 9012 (Jane Smith).pdf");
-    CHECK(preview[1].destination == folder / "2023.01.31 Fidelity Brokerage 5678 (Jane Smith).pdf");
+    const fs::path folder = s.root() / "Fidelity Brokerage x9012 (was x5678) (Jane Smith)";
+    CHECK(preview[0].destination == folder / "2026.01.31 Fidelity Brokerage x9012 (Jane Smith).pdf");
+    CHECK(preview[1].destination == folder / "2023.01.31 Fidelity Brokerage x5678 (Jane Smith).pdf");
 
     // Carry-forward keeps the chosen number.
     dir.touch("z later.pdf");

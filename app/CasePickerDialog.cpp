@@ -6,8 +6,10 @@
 #include <QListWidget>
 #include <QPushButton>
 #include <QSettings>
+#include <QTimer>
 #include <QVBoxLayout>
 
+#include "CaseDialog.h"
 #include "QtHelpers.h"
 
 using namespace finrenamer;
@@ -17,7 +19,7 @@ namespace {
 constexpr int kIdRole = Qt::UserRole;
 }
 
-CasePickerDialog::CasePickerDialog(Database& db, const QString& purpose, QWidget* parent) : QDialog(parent)
+CasePickerDialog::CasePickerDialog(Database& db, const QString& purpose, QWidget* parent) : QDialog(parent), db_(db)
 {
     setWindowTitle(tr("Choose a Case"));
 
@@ -30,13 +32,14 @@ CasePickerDialog::CasePickerDialog(Database& db, const QString& purpose, QWidget
     list_ = new QListWidget;
     list_->setObjectName("cases");
     runGuarded(this, [&] {
-        for (const ClientCase& c : db.listCases()) {
-            auto* item = new QListWidgetItem(qstr(c.clientName), list_);
-            item->setData(kIdRole, QVariant::fromValue<qlonglong>(c.id));
-        }
+        for (const ClientCase& c : db.listCases()) addItem(c);
     });
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    auto* newBtn = new QPushButton(tr("New Case..."));
+    newBtn->setObjectName("newCase");
+    newBtn->setAutoDefault(false);
+    buttons->addButton(newBtn, QDialogButtonBox::ActionRole);
     ok_ = buttons->button(QDialogButtonBox::Ok);
 
     auto* layout = new QVBoxLayout(this);
@@ -48,6 +51,7 @@ CasePickerDialog::CasePickerDialog(Database& db, const QString& purpose, QWidget
     connect(filter_, &QLineEdit::textChanged, this, &CasePickerDialog::filter);
     connect(list_, &QListWidget::currentItemChanged, this, &CasePickerDialog::updateButtons);
     connect(list_, &QListWidget::itemDoubleClicked, this, &CasePickerDialog::accept);
+    connect(newBtn, &QPushButton::clicked, this, &CasePickerDialog::newCase);
     connect(buttons, &QDialogButtonBox::accepted, this, &CasePickerDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
@@ -56,6 +60,8 @@ CasePickerDialog::CasePickerDialog(Database& db, const QString& purpose, QWidget
     updateButtons();
     resize(380, 420);
     filter_->setFocus();
+    // Nothing to choose from yet: go straight to making the first case.
+    if (list_->count() == 0) QTimer::singleShot(0, this, &CasePickerDialog::newCase);
 }
 
 CasePickerDialog::~CasePickerDialog()
@@ -81,6 +87,28 @@ void CasePickerDialog::selectCase(std::int64_t caseId)
 {
     for (int i = 0; i < list_->count(); ++i)
         if (list_->item(i)->data(kIdRole).toLongLong() == caseId) list_->setCurrentRow(i);
+}
+
+void CasePickerDialog::addItem(const ClientCase& c)
+{
+    auto* item = new QListWidgetItem(qstr(c.clientName), list_);
+    item->setData(kIdRole, QVariant::fromValue<qlonglong>(c.id));
+}
+
+void CasePickerDialog::newCase()
+{
+    CaseDialog dialog(ClientCase{}, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    std::int64_t id = 0;
+    if (!runGuarded(this, [&] { id = db_.createCase(dialog.result(), defaultCasePeople()); })) return;
+    filter_->clear();
+    list_->clear();
+    runGuarded(this, [&] {
+        for (const ClientCase& c : db_.listCases()) addItem(c);
+    });
+    selectCase(id);
+    updateButtons();
+    accept();  // carry on with the new case
 }
 
 void CasePickerDialog::filter(const QString& text)

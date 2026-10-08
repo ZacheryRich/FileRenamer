@@ -10,7 +10,7 @@ TEST_CASE("Subfolder layout for each sort option")
 {
     const Account acct = testing::chaseJoint();
     const DateSpec date = SingleDate{makeDate(2026, 1, 31)};
-    const fs::path accountDir = "Chase Checking 1234 (John Smith; Jane Smith)";
+    const fs::path accountDir = "Chase Checking x1234 (John Smith; Jane Smith)";
 
     SortOptions opts;
     CHECK(subfolderFor(acct, date, opts).empty());
@@ -45,7 +45,7 @@ TEST_CASE("Account folders list previous numbers")
     SortOptions opts;
     opts.byAccount = true;
     CHECK(subfolderFor(a, Quarter{2026, 1}, opts) ==
-          fs::path("Fidelity Brokerage 5678 (was x1111) (Jane Smith)"));
+          fs::path("Fidelity Brokerage x5678 (was x1111) (Jane Smith)"));
 }
 
 TEST_CASE("A combined statement gets its own account folder")

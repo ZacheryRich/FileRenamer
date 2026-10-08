@@ -34,7 +34,7 @@ sorts into subfolders) → **Undo** if needed.
 
 ## Filename rules (decided with the user — don't change without asking)
 
-    YYYY.MM.DD <Institution> <Type> <Last4> (<Owner>; <Owner>).pdf
+    YYYY.MM.DD <Institution> <Type> x<Last4> (<Owner>; <Owner>).pdf
 
 - **Date modes** (per file):
   - Single date → `2026.01.31`
@@ -43,12 +43,21 @@ sorts into subfolders) → **Undo** if needed.
     sorts after dated files in Explorer)
 - **Institution** uses the account's *institution display name* if set
   (e.g. "Bank of America" → `BofA`), else the full institution name.
-- **Account type** is free text, autocompleted from types used before.
+- **Account type** is free text, autocompleted from types used before. **Optional**
+  (user: leave it blank if unknown): a blank type just drops out of the label --
+  `2026.01.31 Chase x1234 (H).pdf`; on a combined statement `Chase x1111, Sav x2222`.
+  Only the institution and a last-four number are required (`validateAccount`).
 - **Owners**: each person's *display name* (e.g. `H`, `W`, `J`), in the account's
   owner order, joined with `"; "` → `(H; W)`. No owners → no parentheses.
 - Windows-illegal characters are cleaned: `/ \ : |` → `-`; `< > " ? *` removed;
   whitespace collapsed; trailing dots/spaces trimmed.
-- Example: `2026.01.31 BofA Checking 1234 (J).pdf`
+- Example: `2026.01.31 BofA Checking x1234 (J).pdf`
+- **The number is written with an `x`** (`x1234`) in every name, single accounts as
+  well as combined statements (user's request). Names written before that
+  (`... Checking 1234 (J).pdf`, and folders likewise) are still **recognised**
+  (`legacyAccountLabel()`, used by `FileLabelIndex` and `NameFixer`; never used to
+  name anything): the Deficiency List counts them as ordinary matches and Update File
+  Names renames them (and their account folders) to the x form in place.
 - **Account numbers**: an account has one or more numbers (last four), newest
   first; the top one is current (`lastFour`), the rest are `previousLastFour`.
   Edited in the account dialog as one ordered list (Add Newer Number, Newer/Older
@@ -56,7 +65,7 @@ sorts into subfolders) → **Undo** if needed.
   statement shows, chosen per file with the rename screen's **Number** dropdown
   (next to the account dropdown; enabled when the account has >1 number); they
   never show "was". The **account folder** shows the older ones:
-  `Chase Credit Card 9012 (was x5678, x1234) (H)`.
+  `Chase Credit Card x9012 (was x5678, x1234) (H)`.
 
 - **Combined statements** (one PDF covering several accounts at the same institution):
   `2026.01.31 Chase Chk x1111, Sav x2222, Chk x3333 (H; W).pdf` -- institution once,
@@ -81,7 +90,7 @@ sorts into subfolders) → **Undo** if needed.
 - Optional: by account, by year, or both (order: Account→Year or Year→Account).
 - Account folder name = the **full label** (same as the filename minus the date),
   plus `(was x...)` after the number when the account has previous numbers
-  (`accountFolderLabel()`): `BofA Checking 1234 (J)`, `Chase Credit Card 5678 (was x1234) (H)`.
+  (`accountFolderLabel()`): `BofA Checking x1234 (J)`, `Chase Credit Card x5678 (was x1234) (H)`.
 - Year folder = the date's year; **periods use the end date's year**; quarters their own year.
 - Folders are created only when a file goes into them; undo removes only folders
   that batch created, and only if empty.
@@ -153,6 +162,18 @@ sorts into subfolders) → **Undo** if needed.
   opening/after closing show "2022 (not open)" with dashes. Matching reads each PDF's
   *name* (`splitStatementName` -> date + label -> `FileLabelIndex.find`), so current
   labels, previous-number labels, recorded old names and " (n)" copies all count.
+  **Loose matching** (user's request: files named in the past, not by this program,
+  must count too): a name that isn't in the program's format is read by
+  `LooseNameMatcher` (`LooseStatementNames.cpp`): a date *anywhere* in the name
+  (`2023-05-31`, `20230531`, `05-31-2023`, `2023-05`, `May 2023`, `May 31, 2023`,
+  `2023 Q2`, periods) plus the account's **last four** (also `x1234`; previous numbers
+  too) plus the **institution** (full or display name) **or the type**, as whole words
+  in any order/case; owners and everything else are ignored. A combined statement
+  needs the institution and all its numbers. **Never guesses**: a tie between two
+  accounts, or a number alone, stays unmatched. Loose matches are counted, listed under
+  "Other Name Styles..." (`CoverageScan::loose`) and mentioned in the summary.
+  Known limit: an abbreviation the account doesn't use (e.g. "WF" for "Wells Fargo")
+  still needs the type, or the file stays under "Files Not Matched...".
   A single date covers its calendar month, a period every month it touches, a
   quarter its three months; a combined statement credits every member account.
   PDFs not named like a statement are listed under "Files Not Matched...". Combined
@@ -180,6 +201,7 @@ sorts into subfolders) → **Undo** if needed.
       RenameSession         rename-screen state: rows, carry-forward, refresh,
                             apply (partial), undoLast
       FolderSearch, StatementNames   find PDFs in folders; split a statement name into date + label
+      LooseStatementNames   findLooseDate, LooseNameMatcher: forgiving date/account reader for old names
       StatementCoverage     scanStatements (months covered per account), analyzeCoverage (per year)
       DeficiencyReport      buildDeficiencyReport (plain-text model), writeDocx/docxBytes (DocxWriter.cpp)
       Database              SQLite via SQLiteCpp (pimpl; not exposed in headers)
@@ -187,7 +209,7 @@ sorts into subfolders) → **Undo** if needed.
     app/                    Qt Widgets GUI (static lib finrenamer_ui + FinRenamer.exe)
       main.cpp              opens the DB in AppData, shows HomeWindow
       HomeWindow            start screen: Case List / File Renamer / Deficiency List tiles
-      CasePickerDialog      "Choose a Case" (filter list; remembers home/lastCase) for the last two tiles
+      CasePickerDialog      "Choose a Case" (filter list; remembers home/lastCase; "New Case..." button "newCase" creates + selects + continues; opens straight into it when there are no cases) for the last two tiles
       MainWindow            the Case List: cases list | people table + accounts table; File menu
       CaseDialog, PersonDialog, AccountDialog
       RenameWindow          the rename screen (table + editor left, preview right)
@@ -199,7 +221,7 @@ sorts into subfolders) → **Undo** if needed.
       DeficiencyDialog      Deficiency List: range, options, accounts, preview, Save as Word
       QtHelpers.h           qstr/stdstr/toPath/qpath, settingsFile, personLabel,
                             disconnectChildren, runGuarded
-    tests/                  Catch2 v3 (98 tests): core + Database + RenameSession + NameFixer
+    tests/                  Catch2 v3 (106 tests): core + Database + RenameSession + NameFixer
     installer/FinRenamer.iss  Inno Setup script
 
 Dependencies: Qt 6.12 (Widgets, optional Pdf/PdfWidgets), SQLiteCpp 3.3.3 and
@@ -245,7 +267,7 @@ Catch2 3.7.1 (vcpkg if present, else FetchContent from GitHub).
   rename screen; the program's name for it is "File Renamer", not "Rename Files") and
   **Deficiency List**; the last two ask which case via `CasePickerDialog` (last case
   preselected). Closing the start screen quits the app (`quitOnLastWindowClosed` is off).
-  objectNames: "caseList", "fileRenamer", "deficiencyList".
+  objectNames: "caseList", "fileRenamer", "deficiencyList"; picker: "filter", "cases", "newCase".
   **Look** (user asked for the start screen and Case List to match the File Renamer):
   stock Fusion widgets, boxed panels (`QGroupBox`: Cases / People / Accounts), a
   1.5x bold title, and the File Renamer's footer -- information on the left (data
@@ -253,7 +275,7 @@ Catch2 3.7.1 (vcpkg if present, else FetchContent from GitHub).
   `QStatusBar`. Keep new screens in this style.
 - Account dialog objectNames: "statementType", "members", "memberChoice", "addMember", "numbers", "openedOn", "closedOn".
 - Deficiency dialog objectNames: "folders", "subfolders", "fromMonth", "fromYear", "toMonth", "toYear",
-  "present", "found", "missing", "accounts", "preview", "summary", "unmatched", "save".
+  "present", "found", "missing", "accounts", "preview", "summary", "unmatched", "loose", "save".
 - The PDF preview reads the file into memory (QBuffer) so it never locks the file
   against renaming.
 

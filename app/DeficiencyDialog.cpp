@@ -193,11 +193,15 @@ DeficiencyDialog::DeficiencyDialog(Database& db, std::int64_t caseId, QWidget* p
     summary_->setWordWrap(true);
     unmatchedBtn_ = new QPushButton(tr("Files Not Matched..."));
     unmatchedBtn_->setObjectName("unmatched");
+    looseBtn_ = new QPushButton(tr("Other Name Styles..."));
+    looseBtn_->setObjectName("loose");
+    looseBtn_->setToolTip(tr("Files counted although their names aren't in this program's format"));
     auto* rescanBtn = new QPushButton(tr("Scan Again"));
     saveBtn_ = new QPushButton(tr("Save as Word..."));
     saveBtn_->setObjectName("save");
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
     buttons->addButton(unmatchedBtn_, QDialogButtonBox::ActionRole);
+    buttons->addButton(looseBtn_, QDialogButtonBox::ActionRole);
     buttons->addButton(rescanBtn, QDialogButtonBox::ActionRole);
     buttons->addButton(saveBtn_, QDialogButtonBox::AcceptRole);
 
@@ -266,6 +270,7 @@ DeficiencyDialog::DeficiencyDialog(Database& db, std::int64_t caseId, QWidget* p
     });
     connect(rescanBtn, &QPushButton::clicked, this, &DeficiencyDialog::rescan);
     connect(unmatchedBtn_, &QPushButton::clicked, this, &DeficiencyDialog::showUnmatched);
+    connect(looseBtn_, &QPushButton::clicked, this, &DeficiencyDialog::showLoose);
     connect(saveBtn_, &QPushButton::clicked, this, &DeficiencyDialog::saveAs);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
@@ -443,12 +448,16 @@ void DeficiencyDialog::refresh()
         summary_->setText(tr("Add the folders to search."));
     } else {
         const std::size_t unmatched = scan_.unmatched.size();
-        summary_->setText(tr("%1 PDF(s) found: %2 matched to accounts, %3 not matched.")
-                              .arg(scan_.pdfCount)
-                              .arg(scan_.matchedCount)
-                              .arg(unmatched));
+        QString text = tr("%1 PDF(s) found: %2 matched to accounts, %3 not matched.")
+                           .arg(scan_.pdfCount)
+                           .arg(scan_.matchedCount)
+                           .arg(unmatched);
+        if (!scan_.loose.empty())
+            text += tr("  %1 matched were named in another style (see Other Name Styles).").arg(scan_.loose.size());
+        summary_->setText(text);
     }
     unmatchedBtn_->setEnabled(!scan_.unmatched.empty());
+    looseBtn_->setEnabled(!scan_.loose.empty());
 }
 
 QString DeficiencyDialog::previewText() const
@@ -456,20 +465,36 @@ QString DeficiencyDialog::previewText() const
     return preview_->toPlainText();
 }
 
-void DeficiencyDialog::showUnmatched()
+void DeficiencyDialog::showFileList(const QString& title, const QString& text,
+                                    const std::vector<fs::path>& files)
 {
     QStringList lines;
-    for (std::size_t i = 0; i < scan_.unmatched.size() && i < 500; ++i)
-        lines << QDir::toNativeSeparators(qpath(scan_.unmatched[i]));
-    if (scan_.unmatched.size() > 500) lines << tr("...and %1 more.").arg(scan_.unmatched.size() - 500);
+    for (std::size_t i = 0; i < files.size() && i < 500; ++i) lines << QDir::toNativeSeparators(qpath(files[i]));
+    if (files.size() > 500) lines << tr("...and %1 more.").arg(files.size() - 500);
 
-    QMessageBox box(QMessageBox::Information, tr("Files not matched"),
-                    tr("These %1 PDF(s) aren't named like a statement of this case's accounts, so they "
-                       "weren't counted. Rename them first (or add the folder's account), then scan again.")
-                        .arg(scan_.unmatched.size()),
-                    QMessageBox::Close, this);
+    QMessageBox box(QMessageBox::Information, title, text, QMessageBox::Close, this);
     box.setDetailedText(lines.join('\n'));
     box.exec();
+}
+
+void DeficiencyDialog::showUnmatched()
+{
+    showFileList(tr("Files not matched"),
+                 tr("These %1 PDF(s) weren't counted: no readable date, or no account of this case "
+                    "(its last four digits plus the institution or type) in the name. Rename them with "
+                    "File Renamer, then scan again.")
+                     .arg(scan_.unmatched.size()),
+                 scan_.unmatched);
+}
+
+void DeficiencyDialog::showLoose()
+{
+    showFileList(tr("Other name styles"),
+                 tr("These %1 PDF(s) aren't named the way this program names files, but each shows a "
+                    "date and an account's last four digits with its institution or type, so they were "
+                    "counted. Check the list; File Renamer can rename them properly.")
+                     .arg(scan_.loose.size()),
+                 scan_.loose);
 }
 
 // ---------------------------------------------------------------------------

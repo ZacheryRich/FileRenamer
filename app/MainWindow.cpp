@@ -378,10 +378,10 @@ void MainWindow::reloadAccounts(std::optional<std::int64_t> select)
                 for (const auto memberId : a.memberIds)
                     for (const AccountRecord& m : accounts)
                         if (m.id == memberId) {
-                            types << qstr(m.accountType);
+                            if (!m.accountType.empty()) types << qstr(m.accountType);
                             numbers << qstr(m.lastFour);
                         }
-                type = tr("Combined: %1").arg(types.join(QStringLiteral(", ")));
+                type = types.isEmpty() ? tr("Combined") : tr("Combined: %1").arg(types.join(QStringLiteral(", ")));
                 number = numbers.join(QStringLiteral(", "));
             } else if (!a.previousLastFour.empty()) {
                 QStringList was;

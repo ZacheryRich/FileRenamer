@@ -39,7 +39,7 @@ TEST_CASE("A simple rename is Ready with the expected destination")
     REQUIRE(plan.moves.size() == 1);
     CHECK(plan.moves[0].status == MoveStatus::Ready);
     CHECK(plan.moves[0].destination ==
-          dir.path() / "2026.01.31 Chase Checking 1234 (John Smith; Jane Smith).pdf");
+          dir.path() / "2026.01.31 Chase Checking x1234 (John Smith; Jane Smith).pdf");
     CHECK(plan.hasWork());
     CHECK(fs::exists(src));  // planning never touches the disk
 }
@@ -63,9 +63,9 @@ TEST_CASE("Two files with the same name get a numbered suffix")
     const auto plan = buildPlan(dir.path(), {input(a, testing::chaseJoint(), d),
                                              input(b, testing::chaseJoint(), d)});
     CHECK(plan.moves[0].destination.filename() ==
-          "2026.01.31 Chase Checking 1234 (John Smith; Jane Smith).pdf");
+          "2026.01.31 Chase Checking x1234 (John Smith; Jane Smith).pdf");
     CHECK(plan.moves[1].destination.filename() ==
-          "2026.01.31 Chase Checking 1234 (John Smith; Jane Smith) (2).pdf");
+          "2026.01.31 Chase Checking x1234 (John Smith; Jane Smith) (2).pdf");
     CHECK(plan.moves[1].status == MoveStatus::Ready);
     CHECK_FALSE(plan.moves[1].message.empty());
 }
@@ -73,25 +73,25 @@ TEST_CASE("Two files with the same name get a numbered suffix")
 TEST_CASE("An existing file on disk is never overwritten")
 {
     testing::TempDir dir;
-    dir.touch("2026.Q1 Fidelity Brokerage 5678 (Jane Smith).pdf");
+    dir.touch("2026.Q1 Fidelity Brokerage x5678 (Jane Smith).pdf");
     const fs::path src = dir.touch("new.pdf");
 
     const auto plan = buildPlan(dir.path(), {input(src, testing::fidelitySingle(), Quarter{2026, 1})});
     CHECK(plan.moves[0].destination.filename() ==
-          "2026.Q1 Fidelity Brokerage 5678 (Jane Smith) (2).pdf");
+          "2026.Q1 Fidelity Brokerage x5678 (Jane Smith) (2).pdf");
 }
 
 TEST_CASE("Collisions inside a subfolder are detected too")
 {
     testing::TempDir dir;
-    dir.touch("2026/2026.Q1 Fidelity Brokerage 5678 (Jane Smith).pdf");
+    dir.touch("2026/2026.Q1 Fidelity Brokerage x5678 (Jane Smith).pdf");
     const fs::path src = dir.touch("new.pdf");
 
     PlanOptions opts;
     opts.sort.byYear = true;
     const auto plan = buildPlan(dir.path(), {input(src, testing::fidelitySingle(), Quarter{2026, 1})}, opts);
     CHECK(plan.moves[0].destination ==
-          dir.path() / "2026" / "2026.Q1 Fidelity Brokerage 5678 (Jane Smith) (2).pdf");
+          dir.path() / "2026" / "2026.Q1 Fidelity Brokerage x5678 (Jane Smith) (2).pdf");
 }
 
 TEST_CASE("Block policy marks collisions instead of numbering")
@@ -112,7 +112,7 @@ TEST_CASE("Block policy marks collisions instead of numbering")
 TEST_CASE("A file that already has the right name is Unchanged")
 {
     testing::TempDir dir;
-    const fs::path src = dir.touch("2026.Q1 Fidelity Brokerage 5678 (Jane Smith).pdf");
+    const fs::path src = dir.touch("2026.Q1 Fidelity Brokerage x5678 (Jane Smith).pdf");
     const auto plan = buildPlan(dir.path(), {input(src, testing::fidelitySingle(), Quarter{2026, 1})});
     CHECK(plan.moves[0].status == MoveStatus::Unchanged);
     CHECK_FALSE(plan.hasWork());
@@ -155,7 +155,7 @@ TEST_CASE("Skipped files are left alone and still hold their name")
 {
     testing::TempDir dir;
     // This file already uses the name the second file would get.
-    const fs::path keep = dir.touch("2026.Q1 Fidelity Brokerage 5678 (Jane Smith).pdf", "KEEP");
+    const fs::path keep = dir.touch("2026.Q1 Fidelity Brokerage x5678 (Jane Smith).pdf", "KEEP");
     const fs::path other = dir.touch("scan.pdf");
     const fs::path cover = dir.touch("cover letter.pdf");
 
@@ -169,7 +169,7 @@ TEST_CASE("Skipped files are left alone and still hold their name")
     CHECK(plan.moves[0].destination.empty());
     CHECK(plan.moves[2].status == MoveStatus::Skipped);  // half-filled rows can be skipped too
     CHECK(plan.moves[1].destination.filename() ==
-          "2026.Q1 Fidelity Brokerage 5678 (Jane Smith) (2).pdf");
+          "2026.Q1 Fidelity Brokerage x5678 (Jane Smith) (2).pdf");
     CHECK(plan.count(MoveStatus::Skipped) == 2);
     CHECK(plan.allResolved());
 
@@ -207,5 +207,5 @@ TEST_CASE("Names that differ only in letter case are treated as the same")
     const auto plan = buildPlan(dir.path(), {input(a, upper, Quarter{2026, 1}),
                                              input(b, lower, Quarter{2026, 1})});
     CHECK(utf8FromPath(plan.moves[1].destination.filename()) ==
-          "2026.Q1 Fidelity Brokerage 5678 (josé núñez) (2).pdf");
+          "2026.Q1 Fidelity Brokerage x5678 (josé núñez) (2).pdf");
 }

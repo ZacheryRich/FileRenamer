@@ -24,10 +24,10 @@ TEST_CASE("Apply renames and sorts, then undo restores everything")
     REQUIRE(result.failures.empty());
     REQUIRE(result.record.moves.size() == 2);
 
-    const fs::path aDest = dir.path() / "Chase Checking 1234 (John Smith; Jane Smith)" / "2026" /
-                           "2026.01.31 Chase Checking 1234 (John Smith; Jane Smith).pdf";
-    const fs::path bDest = dir.path() / "Fidelity Brokerage 5678 (Jane Smith)" / "2025" /
-                           "2025.Q4 Fidelity Brokerage 5678 (Jane Smith).pdf";
+    const fs::path aDest = dir.path() / "Chase Checking x1234 (John Smith; Jane Smith)" / "2026" /
+                           "2026.01.31 Chase Checking x1234 (John Smith; Jane Smith).pdf";
+    const fs::path bDest = dir.path() / "Fidelity Brokerage x5678 (Jane Smith)" / "2025" /
+                           "2025.Q4 Fidelity Brokerage x5678 (Jane Smith).pdf";
     CHECK(testing::readFile(aDest) == "AAA");
     CHECK(testing::readFile(bDest) == "BBB");
     CHECK_FALSE(fs::exists(a));
@@ -39,7 +39,7 @@ TEST_CASE("Apply renames and sorts, then undo restores everything")
     CHECK(undone.foldersRemoved == 4);
     CHECK(testing::readFile(a) == "AAA");
     CHECK(testing::readFile(b) == "BBB");
-    CHECK_FALSE(fs::exists(dir.path() / "Chase Checking 1234 (John Smith; Jane Smith)"));
+    CHECK_FALSE(fs::exists(dir.path() / "Chase Checking x1234 (John Smith; Jane Smith)"));
 }
 
 TEST_CASE("Undo never deletes folders that existed before, or that hold other files")
@@ -98,7 +98,7 @@ TEST_CASE("Failed moves do not leave empty folders behind")
     const auto result = execute(plan);
     CHECK(result.failures.size() == 1);
     CHECK(result.record.createdFolders.empty());
-    CHECK_FALSE(fs::exists(dir.path() / "Fidelity Brokerage 5678 (Jane Smith)"));
+    CHECK_FALSE(fs::exists(dir.path() / "Fidelity Brokerage x5678 (Jane Smith)"));
 }
 
 TEST_CASE("Non-ASCII names survive the round trip")
@@ -114,7 +114,7 @@ TEST_CASE("Non-ASCII names survive the round trip")
     const auto result = execute(plan);
     REQUIRE(result.failures.empty());
     CHECK(fs::exists(dir.path() /
-                     pathFromUtf8("2026.03.31 Banco Popular Checking 1234 (José Núñez; María Peña).pdf")));
+                     pathFromUtf8("2026.03.31 Banco Popular Checking x1234 (José Núñez; María Peña).pdf")));
 }
 
 TEST_CASE("Undo reports files that were moved again since")

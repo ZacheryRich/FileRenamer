@@ -91,13 +91,6 @@ void HomeWindow::closeEvent(QCloseEvent* event)
 
 std::optional<std::int64_t> HomeWindow::chooseCase(const QString& purpose)
 {
-    bool any = false;
-    runGuarded(this, [&] { any = !db_.listCases().empty(); });
-    if (!any) {
-        QMessageBox::information(this, tr("No cases yet"),
-                                 tr("There are no cases yet. Open Case List and add one first."));
-        return std::nullopt;
-    }
     CasePickerDialog picker(db_, purpose, this);
     if (picker.exec() != QDialog::Accepted) return std::nullopt;
     return picker.selectedCaseId();

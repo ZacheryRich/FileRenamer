@@ -7,6 +7,7 @@
 #include "TestHelpers.h"
 #include "finrenamer/Database.h"
 #include "finrenamer/DeficiencyReport.h"
+#include "finrenamer/LooseStatementNames.h"
 #include "finrenamer/StatementCoverage.h"
 
 using namespace finrenamer;
@@ -72,12 +73,12 @@ TEST_CASE("Month lists are written as short ranges")
 TEST_CASE("Months found come from renamed files, wherever they are")
 {
     Coverage c;
-    c.dir.touch("2024.01.31 Chase Checking 1234 (H).pdf");
-    c.dir.touch("2024.02.29 Chase Checking 1234 (H).pdf");
-    c.dir.touch("2023/2023.12.31 Chase Checking 1234 (H).pdf");  // a subfolder
-    c.dir.touch("2024.02.29 Chase Checking 1234 (H) (2).pdf");   // a collision copy: same month
-    c.dir.touch("2024.Q1 Fidelity IRA 5678 (W).pdf");            // a quarter: Jan, Feb, Mar
-    c.dir.touch("2024.04.01 - 2024.06.30 Fidelity IRA 5678 (W).PDF");  // a period, any letter case
+    c.dir.touch("2024.01.31 Chase Checking x1234 (H).pdf");
+    c.dir.touch("2024.02.29 Chase Checking x1234 (H).pdf");
+    c.dir.touch("2023/2023.12.31 Chase Checking x1234 (H).pdf");  // a subfolder
+    c.dir.touch("2024.02.29 Chase Checking x1234 (H) (2).pdf");   // a collision copy: same month
+    c.dir.touch("2024.Q1 Fidelity IRA x5678 (W).pdf");            // a quarter: Jan, Feb, Mar
+    c.dir.touch("2024.04.01 - 2024.06.30 Fidelity IRA x5678 (W).PDF");  // a period, any letter case
 
     auto scan = c.scan();
     CHECK(c.monthsOf(scan, c.checking) == std::set<Month>{ym(2023, 12), ym(2024, 1), ym(2024, 2)});
@@ -95,9 +96,9 @@ TEST_CASE("Files that aren't statements of this case are reported, not counted")
 {
     Coverage c;
     c.dir.touch("scan0001.pdf");
-    c.dir.touch("2024.01.31 Wells Fargo Savings 9999 (H).pdf");  // not an account of this case
-    c.dir.touch("2024.13.31 Chase Checking 1234 (H).pdf");       // not a date
-    c.dir.touch("2024.03.31 Chase Checking 1234 (H).pdf");
+    c.dir.touch("2024.01.31 Wells Fargo Savings x9999 (H).pdf");  // not an account of this case
+    c.dir.touch("2024.13.31 Chase Checking x1234 (H).pdf");       // not a date
+    c.dir.touch("2024.03.31 Chase Checking x1234 (H).pdf");
     c.dir.touch("notes.txt");
 
     const auto scan = c.scan();
@@ -116,14 +117,14 @@ TEST_CASE("Names from before a typo fix or a new number still count for the acco
     c.db.updateAccount(r);      // the typo...
     r.institution = "Chase";
     c.db.updateAccount(r);      // ...fixed
-    c.dir.touch("2024.01.31 Chsae Checking 1234 (H).pdf");
+    c.dir.touch("2024.01.31 Chsae Checking x1234 (H).pdf");
 
     r = *c.db.getAccount(c.checking);
     r.previousLastFour = {r.lastFour};
     r.lastFour = "7777";  // a replacement card
     c.db.updateAccount(r);
-    c.dir.touch("2024.02.29 Chase Checking 1234 (H).pdf");  // statement showing the old number
-    c.dir.touch("2024.03.31 Chase Checking 7777 (H).pdf");
+    c.dir.touch("2024.02.29 Chase Checking x1234 (H).pdf");  // statement showing the old number
+    c.dir.touch("2024.03.31 Chase Checking x7777 (H).pdf");
 
     CHECK(c.monthsOf(c.scan(), c.checking) == std::set<Month>{ym(2024, 1), ym(2024, 2), ym(2024, 3)});
 }
@@ -139,7 +140,7 @@ TEST_CASE("A combined statement counts for every account on it")
     c.db.createAccount(combined);
 
     c.dir.touch("2024.05.31 Chase Checking x1234, Savings x2222 (H).pdf");
-    c.dir.touch("2024.06.30 Chase Savings 2222 (H).pdf");  // a single statement of one member
+    c.dir.touch("2024.06.30 Chase Savings x2222 (H).pdf");  // a single statement of one member
 
     const auto scan = c.scan();
     CHECK(c.monthsOf(scan, c.checking) == std::set<Month>{ym(2024, 5)});
@@ -151,7 +152,7 @@ TEST_CASE("Coverage is worked out per year within the range")
 {
     Coverage c;
     for (const char* name : {"2023.11.30", "2023.12.31", "2024.01.31", "2024.03.31", "2024.04.30"})
-        c.dir.touch(std::string(name) + " Chase Checking 1234 (H).pdf");
+        c.dir.touch(std::string(name) + " Chase Checking x1234 (H).pdf");
     const auto scan = c.scan();
 
     const auto accounts = c.db.loadAccounts(c.caseId);
@@ -163,7 +164,7 @@ TEST_CASE("Coverage is worked out per year within the range")
     auto coverage = analyzeCoverage(checking, scan, ym(2023, 10), ym(2024, 4));
     REQUIRE(coverage.size() == 1);
     REQUIRE(coverage[0].years.size() == 2);
-    CHECK(coverage[0].label == "Chase Checking 1234 (H)");
+    CHECK(coverage[0].label == "Chase Checking x1234 (H)");
     CHECK(coverage[0].years[0].year == 2023);
     CHECK(coverage[0].years[0].found == months({11, 12}));
     CHECK(coverage[0].years[0].missing == months({10}));  // months before the range aren't listed
@@ -191,7 +192,7 @@ TEST_CASE("The report reads as the Deficiency List")
 {
     Coverage c;
     for (const char* name : {"2024.01.31", "2024.03.31"})
-        c.dir.touch(std::string(name) + " Chase Checking 1234 (H).pdf");
+        c.dir.touch(std::string(name) + " Chase Checking x1234 (H).pdf");
     auto accounts = c.db.loadAccounts(c.caseId);
     accounts.erase(std::remove_if(accounts.begin(), accounts.end(), [&](const Account& a) { return a.id != c.checking; }),
                    accounts.end());
@@ -207,7 +208,7 @@ TEST_CASE("The report reads as the Deficiency List")
     CHECK(report.showFound);
     CHECK(report.showMissing);
     REQUIRE(report.tables.size() == 1);
-    CHECK(report.tables[0].heading == "Chase Checking 1234 (H)");
+    CHECK(report.tables[0].heading == "Chase Checking x1234 (H)");
     CHECK(report.tables[0].note == "Opened June 15, 2023.");
     REQUIRE(report.tables[0].rows.size() == 2);
     CHECK(report.tables[0].rows[0].year == "2023");
@@ -301,9 +302,9 @@ TEST_CASE("The Word document is a valid package with the report in it")
     DeficiencyReport report;
     report.title = "Smith & Jones <Deficiency> List";
     report.rangeLine = "January 2023 \xE2\x80\x93 Present";
-    report.tables.push_back({"Chase Checking 1234 (H)", "Opened June 15, 2023.",
+    report.tables.push_back({"Chase Checking x1234 (H)", "Opened June 15, 2023.",
                              {{"2023", "None", "Jun\xE2\x80\x93" "Dec"}, {"2024", "Jan, Mar", "Feb"}}});
-    report.tables.push_back({"Fidelity IRA 5678 (W)", "", {{"2023", "Jan\xE2\x80\x93" "Dec", "None"}}});
+    report.tables.push_back({"Fidelity IRA x5678 (W)", "", {{"2023", "Jan\xE2\x80\x93" "Dec", "None"}}});
 
     const auto zip = readZip(docxBytes(report));
     for (const char* name : {"[Content_Types].xml", "_rels/.rels", "word/document.xml",
@@ -315,7 +316,7 @@ TEST_CASE("The Word document is a valid package with the report in it")
     const std::string& doc = zip.at("word/document.xml").data;
     CHECK_THAT(doc, ContainsSubstring("Smith &amp; Jones &lt;Deficiency&gt; List"));
     CHECK_THAT(doc, ContainsSubstring("January 2023 \xE2\x80\x93 Present"));
-    CHECK_THAT(doc, ContainsSubstring("Chase Checking 1234 (H)"));
+    CHECK_THAT(doc, ContainsSubstring("Chase Checking x1234 (H)"));
     CHECK_THAT(doc, ContainsSubstring("Opened June 15, 2023."));
     CHECK_THAT(doc, ContainsSubstring("Months Found"));
     CHECK_THAT(doc, ContainsSubstring("Months Missing"));
@@ -344,4 +345,95 @@ TEST_CASE("Saving the Word document writes the file")
     writeDocx(file, report);
     CHECK(testing::readFile(file) == docxBytes(report));
     CHECK_THROWS(writeDocx(dir.path() / "no such folder" / "x.docx", report));
+}
+
+TEST_CASE("Loose dates are read from anywhere in a name")
+{
+    auto single = [](const std::string& text) -> std::optional<chr::year_month_day> {
+        const auto f = findLooseDate(text);
+        if (!f) return std::nullopt;
+        if (const auto* s = std::get_if<SingleDate>(&f->date)) return s->date;
+        return std::nullopt;
+    };
+    CHECK(single("Chase 1234 2023-05-31") == makeDate(2023, 5, 31));
+    CHECK(single("20230531 Chase") == makeDate(2023, 5, 31));
+    CHECK(single("stmt 05-31-2023") == makeDate(2023, 5, 31));
+    CHECK(single("Chase 1234 May 2023") == makeDate(2023, 5, 1));
+    CHECK(single("Chase 1234 Sept. 2023") == makeDate(2023, 9, 1));
+    CHECK(single("Chase 1234 May 31, 2023") == makeDate(2023, 5, 31));
+    CHECK(single("2023-05 Chase") == makeDate(2023, 5, 1));
+    CHECK(!single("2023-13-01 Chase"));
+    CHECK(!single("Chase Checking 1234"));
+    CHECK(!single("2023.02.30 Chase"));
+
+    const auto quarter = findLooseDate("Chase 1234 2023 Q2");
+    REQUIRE(quarter);
+    CHECK(std::get<Quarter>(quarter->date).quarter == 2);
+    const auto period = findLooseDate("Chase 1234 2023.04.01 - 2023.06.30");
+    REQUIRE(period);
+    CHECK(std::holds_alternative<Period>(period->date));
+}
+
+TEST_CASE("Names in other styles are matched by date, number and institution or type")
+{
+    Coverage c;
+    c.dir.touch("Chase Checking x1234 May 2023.pdf");                 // order and style differ
+    c.dir.touch("2023-06 CHASE chk 1234 statement.pdf");              // institution alone is enough
+    c.dir.touch("07-31-2023 Checking 1234.pdf");                      // type alone is enough
+    c.dir.touch("2023.08.31 Chase Checking 1234.pdf");                // just no owners
+    c.dir.touch("Fidelity IRA 5678 2023 Q3.pdf");                     // quarter
+    c.dir.touch("2023.09.30 Chase 9999.pdf");                         // number of no account here
+    c.dir.touch("2023.10.31 Chase Checking.pdf");                     // no number
+    c.dir.touch("Chase Checking 1234.pdf");                           // no date
+    c.dir.touch("2023.11.30 Chase Checking 1234 (H).pdf");            // the program's own format
+
+    const auto scan = c.scan();
+    CHECK(scan.pdfCount == 9);
+    CHECK(scan.matchedCount == 6);
+    CHECK(scan.loose.size() == 5);  // everything but the program's own format
+    CHECK(scan.unmatched.size() == 3);
+    CHECK(c.monthsOf(scan, c.checking) ==
+          std::set<Month>{ym(2023, 5), ym(2023, 6), ym(2023, 7), ym(2023, 8), ym(2023, 11)});
+    CHECK(c.monthsOf(scan, c.brokerage) == std::set<Month>{ym(2023, 7), ym(2023, 8), ym(2023, 9)});
+}
+
+TEST_CASE("A number alone, or an account that fits two ways equally, is not guessed")
+{
+    Coverage c;
+    c.db.createAccount({0, c.caseId, "Chase", "", "Savings", "1234", {c.husband}});  // same bank, same number
+    c.dir.touch("2023.05.31 Chase 1234.pdf");            // could be either account
+    c.dir.touch("2023.06.30 Chase Savings 1234.pdf");    // the type settles it
+    c.dir.touch("2023.07.31 1234.pdf");                  // number only
+
+    const auto scan = c.scan();
+    CHECK(scan.matchedCount == 1);
+    CHECK(scan.unmatched.size() == 2);
+    CHECK(c.monthsOf(scan, c.checking).empty());
+}
+
+TEST_CASE("A loosely named combined statement needs the institution and all its numbers")
+{
+    Coverage c;
+    const auto savings = c.db.createAccount({0, c.caseId, "Chase", "", "Savings", "2222", {c.husband}});
+    AccountRecord both{0, c.caseId, "Chase", "", "", "", {c.husband}, {}, {c.checking, savings}};
+    c.db.createAccount(both);
+    c.dir.touch("Chase combined 1234 2222 2023-05.pdf");   // both numbers: the combined statement
+    c.dir.touch("Chase Savings 2222 2023-06.pdf");         // one account only
+
+    const auto scan = c.scan();
+    CHECK(scan.matchedCount == 2);
+    CHECK(c.monthsOf(scan, c.checking) == std::set<Month>{ym(2023, 5)});
+    CHECK(c.monthsOf(scan, savings) == std::set<Month>{ym(2023, 5), ym(2023, 6)});
+}
+
+TEST_CASE("Statements named before numbers had an x still count, as ordinary matches")
+{
+    Coverage c;
+    c.dir.touch("2023.05.31 Chase Checking 1234 (H).pdf");   // old style
+    c.dir.touch("2023.06.30 Chase Checking x1234 (H).pdf");  // current style
+
+    const auto scan = c.scan();
+    CHECK(scan.matchedCount == 2);
+    CHECK(scan.loose.empty());
+    CHECK(c.monthsOf(scan, c.checking) == std::set<Month>{ym(2023, 5), ym(2023, 6)});
 }

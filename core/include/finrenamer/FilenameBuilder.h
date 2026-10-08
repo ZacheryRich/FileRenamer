@@ -14,7 +14,7 @@ namespace finrenamer {
 // collapsed, and leading/trailing spaces and trailing dots are trimmed.
 std::string sanitizeComponent(std::string_view text);
 
-// The label used in file names: "Chase Checking 1234 (John Smith; Jane Smith)".
+// The label used in file names: "Chase Checking x1234 (John Smith; Jane Smith)".
 // A combined statement: "Chase Checking x1111, Savings x2222 (H)".
 // `number` picks one of the account's previous numbers instead of the current
 // one (empty = current).
@@ -24,6 +24,12 @@ std::string accountLabel(const Account& account, std::string_view number = {});
 // "Chase Credit Card 9012 (was x5678, x1234) (H)". Without previous numbers it
 // is the same as accountLabel().
 std::string accountFolderLabel(const Account& account);
+
+// The label as this program wrote it before account numbers got their "x"
+// ("Chase Checking 1234 (H)"). Only for recognising files and folders named
+// that way; never used to name anything. Same as accountLabel() for a combined
+// statement, whose numbers always had the x.
+std::string legacyAccountLabel(const Account& account, std::string_view number = {}, bool forFolder = false);
 
 // "2026.01.31 Chase Checking 1234 (John Smith; Jane Smith).pdf"
 std::string buildFilename(const Account& account, const DateSpec& date,

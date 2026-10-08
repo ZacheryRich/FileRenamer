@@ -34,7 +34,7 @@ std::string sanitizeComponent(std::string_view text)
 
 namespace {
 
-std::string buildLabel(const Account& account, std::string_view number, bool withPrevious)
+std::string buildLabel(const Account& account, std::string_view number, bool withPrevious, bool xBeforeNumber = true)
 {
     std::string label;
     auto append = [&label](std::string_view part) {
@@ -59,7 +59,8 @@ std::string buildLabel(const Account& account, std::string_view number, bool wit
         append(parts);
     } else {
         append(account.accountType);
-        append(number.empty() ? std::string_view(account.lastFour) : number);
+        const std::string digits = sanitizeComponent(number.empty() ? std::string_view(account.lastFour) : number);
+        append(!digits.empty() && xBeforeNumber ? "x" + digits : digits);
     }
 
     if (withPrevious && !account.isCombined()) {
@@ -99,6 +100,11 @@ std::string accountFolderLabel(const Account& account)
     return buildLabel(account, {}, true);
 }
 
+std::string legacyAccountLabel(const Account& account, std::string_view number, bool forFolder)
+{
+    return buildLabel(account, number, forFolder, false);
+}
+
 std::string buildFilename(const Account& account, const DateSpec& date,
                           std::string_view extension, std::string_view number)
 {
@@ -111,11 +117,11 @@ std::optional<std::string> validateAccount(const Account& account)
     if (account.isCombined()) {
         if (account.combined.size() < 2) return "A combined statement needs at least two accounts.";
         for (const CombinedPart& p : account.combined)
-            if (sanitizeComponent(p.accountType).empty() || sanitizeComponent(p.lastFour).empty())
-                return "An account on the combined statement has no type or number.";
+            if (sanitizeComponent(p.lastFour).empty())  // the type may be blank
+                return "An account on the combined statement has no number.";
         return std::nullopt;
     }
-    if (sanitizeComponent(account.accountType).empty()) return "Account has no account type.";
+    // The account type is optional (it can be left blank when it isn't known).
     if (sanitizeComponent(account.lastFour).empty()) return "Account has no last four digits.";
     return std::nullopt;
 }

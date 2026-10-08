@@ -101,7 +101,7 @@ TEST_CASE("Accounts keep owners in display order")
     auto accounts = s.db.loadAccounts(s.caseId);
     REQUIRE(accounts.size() == 1);
     CHECK(accounts[0].owners == std::vector<std::string>{"John Smith", "Jane Smith"});
-    CHECK(accountLabel(accounts[0]) == "Chase Checking 1234 (John Smith; Jane Smith)");
+    CHECK(accountLabel(accounts[0]) == "Chase Checking x1234 (John Smith; Jane Smith)");
 
     s.db.updateAccount({id, s.caseId, "Chase", "", "Checking", "1234", {s.jane, s.john}});
     accounts = s.db.loadAccounts(s.caseId);
@@ -143,7 +143,7 @@ TEST_CASE("A person who owns an account can't be deleted")
     SmithCase s;
     const auto acct = s.addAccount("Chase", "Checking", "1234", {s.john});
 
-    CHECK_THROWS_WITH(s.db.deletePerson(s.john), ContainsSubstring("Chase Checking 1234"));
+    CHECK_THROWS_WITH(s.db.deletePerson(s.john), ContainsSubstring("Chase Checking x1234"));
     CHECK_NOTHROW(s.db.deletePerson(s.jane));  // owns nothing
 
     s.db.deleteAccount(acct);
@@ -259,7 +259,7 @@ TEST_CASE("Display names are used in filenames; blank means the full name")
     s.db.updatePerson(s.john, "John Smith", " JS ");
     s.addAccount("Chase", "Checking", "1234", {s.john, s.jane});
     const auto accounts = s.db.loadAccounts(s.caseId);
-    CHECK(accountLabel(accounts[0]) == "Chase Checking 1234 (JS; Jane Smith)");
+    CHECK(accountLabel(accounts[0]) == "Chase Checking x1234 (JS; Jane Smith)");
     CHECK(s.db.listPeople(s.caseId)[0].fullName == "John Smith");
 }
 
@@ -292,7 +292,7 @@ TEST_CASE("New cases can start with Husband, Wife and Joint")
     CHECK(people[2].displayName == "J");
 
     db.createAccount({0, id, "Chase", "", "Checking", "1234", {people[2].id}});
-    CHECK(accountLabel(db.loadAccounts(id)[0]) == "Chase Checking 1234 (J)");
+    CHECK(accountLabel(db.loadAccounts(id)[0]) == "Chase Checking x1234 (J)");
 
     // Defaults are ordinary people: they can be renamed or removed.
     db.updatePerson(people[0].id, "John Smith", "H");
@@ -347,10 +347,10 @@ TEST_CASE("A version 1 database is upgraded and keeps its data")
     const auto people = db.listPeople(1);
     REQUIRE(people.size() == 1);
     CHECK(people[0].displayName == "José Núñez");
-    CHECK(accountLabel(db.loadAccounts(1)[0]) == "Chase Checking 1234 (José Núñez)");
+    CHECK(accountLabel(db.loadAccounts(1)[0]) == "Chase Checking x1234 (José Núñez)");
 
     db.updatePerson(1, "José Núñez", "JN");
-    CHECK(accountLabel(db.loadAccounts(1)[0]) == "Chase Checking 1234 (JN)");
+    CHECK(accountLabel(db.loadAccounts(1)[0]) == "Chase Checking x1234 (JN)");
 
     // Version 3 gave existing accounts their institution as the display name.
     CHECK(db.getAccount(1)->institutionDisplay == "Chase");
@@ -366,15 +366,15 @@ TEST_CASE("Institution display names are used in filenames and folder names")
     CHECK(record->institutionDisplay == "BofA");
 
     const auto account = s.db.loadAccounts(s.caseId)[0];
-    CHECK(accountLabel(account) == "BofA Checking 1234 (John Smith)");
+    CHECK(accountLabel(account) == "BofA Checking x1234 (John Smith)");
     SortOptions byAccount;
     byAccount.byAccount = true;
-    CHECK(subfolderFor(account, Quarter{2026, 1}, byAccount) == fs::path("BofA Checking 1234 (John Smith)"));
+    CHECK(subfolderFor(account, Quarter{2026, 1}, byAccount) == fs::path("BofA Checking x1234 (John Smith)"));
 
     // Blank display name = the full institution.
     s.db.updateAccount({id, s.caseId, "Bank of America", "  ", "Checking", "1234", {s.john}});
     CHECK(s.db.getAccount(id)->institutionDisplay == "Bank of America");
-    CHECK(accountLabel(s.db.loadAccounts(s.caseId)[0]) == "Bank of America Checking 1234 (John Smith)");
+    CHECK(accountLabel(s.db.loadAccounts(s.caseId)[0]) == "Bank of America Checking x1234 (John Smith)");
 }
 
 TEST_CASE("Institution suggestions remember the latest abbreviation for each bank")
@@ -402,7 +402,7 @@ TEST_CASE("Previous numbers are stored, validated and loaded")
     CHECK(s.db.getAccount(id)->previousLastFour == std::vector<std::string>{"5678", "1234"});
     CHECK(s.db.loadAccounts(s.caseId)[0].previousLastFour == std::vector<std::string>{"5678", "1234"});
     CHECK(accountFolderLabel(s.db.loadAccounts(s.caseId)[0]) ==
-          "Chase Credit Card 9012 (was x5678, x1234) (John Smith)");
+          "Chase Credit Card x9012 (was x5678, x1234) (John Smith)");
 
     CHECK_THROWS_WITH(s.db.updateAccount({id, s.caseId, "Chase", "", "Credit Card", "9012", {}, {"9012"}}),
                       ContainsSubstring("more than once"));
@@ -425,7 +425,7 @@ TEST_CASE("Edits that change names are remembered as old names")
     s.db.updateAccount({id, s.caseId, "Chase", "", "Checking", "1234", {s.john}});
     auto old = s.db.oldAccountNames(s.caseId);
     REQUIRE(old.size() == 2);  // the file label and the folder name it had
-    CHECK(old[0].name == "Chsae Checking 1234 (John Smith)");
+    CHECK(old[0].name == "Chsae Checking x1234 (John Smith)");
     CHECK(old[0].lastFour == "1234");
 
     // Card replaced: 1234 becomes a previous number. File names for 1234 stay
@@ -434,14 +434,14 @@ TEST_CASE("Edits that change names are remembered as old names")
     old = s.db.oldAccountNames(s.caseId);
     REQUIRE(old.size() == 3);
     CHECK(old[2].isFolder);
-    CHECK(old[2].name == "Chase Checking 1234 (John Smith)");
+    CHECK(old[2].name == "Chase Checking x1234 (John Smith)");
 
     // A person's new display name changes the names of their accounts.
     s.db.updatePerson(s.john, "John Smith", "H");
     old = s.db.oldAccountNames(s.caseId);
     bool found = false;
     for (const auto& o : old)
-        if (!o.isFolder && o.name == "Chase Checking 5678 (John Smith)") found = true;
+        if (!o.isFolder && o.name == "Chase Checking x5678 (John Smith)") found = true;
     CHECK(found);
 
     // Saving without changes records nothing new.
@@ -475,7 +475,7 @@ TEST_CASE("Combined statements are saved and named from their accounts")
 
     const auto accounts = s.db.loadAccounts(s.caseId);
     REQUIRE(accounts.size() == 5);
-    CHECK(accountLabel(accounts[0]) == "Ally Savings 9999");
+    CHECK(accountLabel(accounts[0]) == "Ally Savings x9999");
     const Account& combined = accounts.back();  // after the institution's own accounts
     REQUIRE(combined.isCombined());
     CHECK(accountLabel(combined) == "Chase Chk x1111, Sav x2222, Chk x3333 (Jane Smith; John Smith)");
@@ -677,4 +677,24 @@ TEST_CASE("A version 5 database is upgraded to opening and closing dates")
     r.openedOn = makeDate(2020, 6, 1);
     db.updateAccount(r);
     CHECK(db.getAccount(1)->openedOn == makeDate(2020, 6, 1));
+}
+
+TEST_CASE("An account can be saved without an account type")
+{
+    Database db = Database::openInMemory();
+    const auto caseId = db.createCase({0, "Smith", ""}, defaultCasePeople());
+    const auto id = db.createAccount({0, caseId, "Chase", "", "", "1234", {}});
+    const auto saved = db.getAccount(id);
+    REQUIRE(saved);
+    CHECK(saved->accountType.empty());
+
+    // Editing keeps it blank, and a type can be added later.
+    auto record = *saved;
+    record.accountType = "Checking";
+    db.updateAccount(record);
+    CHECK(db.getAccount(id)->accountType == "Checking");
+    record.accountType = "";
+    db.updateAccount(record);
+    CHECK(db.getAccount(id)->accountType.empty());
+    CHECK(accountLabel(db.loadAccounts(caseId)[0]) == "Chase x1234");
 }

@@ -6,6 +6,7 @@
 
 #include "finrenamer/FilenameBuilder.h"
 #include "finrenamer/FolderSearch.h"
+#include "finrenamer/LooseStatementNames.h"
 #include "finrenamer/StatementNames.h"
 #include "finrenamer/Utf8Path.h"
 
@@ -64,25 +65,38 @@ CoverageScan scanStatements(const std::vector<fs::path>& chosenFolders, bool inc
 {
     CoverageScan scan;
     const FileLabelIndex labels(accounts, oldNames);
+    const LooseNameMatcher loose(accounts);
 
     for (const fs::path& file : findPdfs(chosenFolders, includeSubfolders)) {
         ++scan.pdfCount;
-        const auto name = splitStatementName(utf8FromPath(file.stem()));
+        const std::string stem = utf8FromPath(file.stem());
+        const auto name = splitStatementName(stem);
         const auto entry = name ? labels.find(name->label) : std::nullopt;
-        if (!entry) {
+
+        const Account* account = nullptr;
+        std::optional<DateSpec> date;
+        if (entry) {
+            account = entry->account;
+            date = name->date;
+        } else if (const auto guess = loose.match(stem)) {
+            account = guess->account;
+            date = guess->date;
+            scan.loose.push_back(file);
+        }
+        if (!account) {
             scan.unmatched.push_back(file);
             continue;
         }
         ++scan.matchedCount;
 
-        const auto months = monthsCovered(name->date);
+        const auto months = monthsCovered(*date);
         auto credit = [&](std::int64_t accountId) {
             scan.covered[accountId].insert(months.begin(), months.end());
         };
-        if (entry->account->isCombined()) {
-            for (const CombinedPart& part : entry->account->combined) credit(part.accountId);
+        if (account->isCombined()) {
+            for (const CombinedPart& part : account->combined) credit(part.accountId);
         } else {
-            credit(entry->account->id);
+            credit(account->id);
         }
     }
     return scan;

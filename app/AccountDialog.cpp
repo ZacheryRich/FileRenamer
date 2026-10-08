@@ -93,7 +93,7 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
     institution_->setCompleter(institutionCompleter);
 
     type_ = new QLineEdit;
-    type_->setPlaceholderText(tr("e.g. Checking, Roth IRA, Credit Card"));
+    type_->setPlaceholderText(tr("Optional, e.g. Checking, Roth IRA, Credit Card"));
     QStringList types;
     runGuarded(this, [&] {
         for (const auto& t : db_.accountTypeSuggestions()) types << qstr(t);
@@ -617,7 +617,7 @@ void AccountDialog::updateState()
     } else {
         preview_->setTextFormat(Qt::RichText);
         preview_->setText(isCombined() ? tr("<i>Add at least two accounts from the same institution.</i>")
-                                       : tr("<i>Fill in institution, account type and an account number.</i>"));
+                                       : tr("<i>Fill in the institution and an account number (the type is optional).</i>"));
     }
 }
 

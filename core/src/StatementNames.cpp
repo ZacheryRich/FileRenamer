@@ -36,6 +36,12 @@ FileLabelIndex::FileLabelIndex(const std::vector<Account>& accounts,
         labels_.emplace(key(accountLabel(a)), Entry{&a, a.lastFour});
         for (const auto& n : a.previousLastFour) labels_.emplace(key(accountLabel(a, n)), Entry{&a, n});
     }
+    // Names from before numbers were written with an "x" ("Chase Checking 1234 (H)").
+    for (const Account& a : accounts) {
+        if (a.isCombined()) continue;
+        labels_.emplace(key(legacyAccountLabel(a)), Entry{&a, a.lastFour});
+        for (const auto& n : a.previousLastFour) labels_.emplace(key(legacyAccountLabel(a, n)), Entry{&a, n});
+    }
     for (const OldAccountName& old : oldNames) {
         if (old.isFolder) continue;
         const auto account = byId.find(old.accountId);

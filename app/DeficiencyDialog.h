@@ -46,6 +46,8 @@ private:
     void refresh();  // recompute the report from the cached scan
     void saveAs();
     void showUnmatched();
+    void showLoose();
+    void showFileList(const QString& title, const QString& text, const std::vector<std::filesystem::path>& files);
     void loadSettings();
     void saveSettings() const;
     finrenamer::Month fromMonth() const;
@@ -76,5 +78,6 @@ private:
     QTextBrowser* preview_ = nullptr;
     QLabel* summary_ = nullptr;
     QPushButton* unmatchedBtn_ = nullptr;
+    QPushButton* looseBtn_ = nullptr;
     QPushButton* saveBtn_ = nullptr;
 };

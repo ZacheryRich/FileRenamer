@@ -2,8 +2,8 @@
 
 Renames and sorts client financial statements (PDFs) into the format
 
-    2026.01.31 Chase Checking 1234 (John Smith; Jane Smith).pdf
-    2026.01.01 - 2026.01.31 Chase Checking 1234 (John Smith).pdf
+    2026.01.31 Chase Checking x1234 (John Smith; Jane Smith).pdf
+    2026.01.01 - 2026.01.31 Chase Checking x1234 (John Smith).pdf
     2026.Q1 Fidelity Brokerage 5678 (Jane Smith).pdf
 
 with optional subfolders by account (full label), by year, or both.
@@ -13,7 +13,7 @@ with optional subfolders by account (full label), by year, or both.
 - [x] `core/`: date modes, filename builder, folder planner, rename plan, rename/undo engine
 - [x] `core/Database`: SQLite storage (cases, people, accounts, rename history)
 - [x] `core/RenameSession`: rename-screen state (rows, carry-forward, refresh, apply, undo last)
-- [x] `tests/`: Catch2 suite (98 tests)
+- [x] `tests/`: Catch2 suite (106 tests)
 - [x] `app/`: Qt 6 main window (cases, people, accounts) and dialogs
 - [x] Rename screen (file table, date modes, sorting, apply/undo) and Rename History
 - [x] PDF preview pane (Qt PDF; optional at build time)
