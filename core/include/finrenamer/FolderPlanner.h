@@ -21,4 +21,7 @@ struct SortOptions {
 std::filesystem::path subfolderFor(const Account& account, const DateSpec& date,
                                    const SortOptions& options);
 
+// Emails, texts, letters and other files are never sorted into subfolders (account
+// and year folders are for statements only): they are renamed where they are.
+
 }  // namespace finrenamer

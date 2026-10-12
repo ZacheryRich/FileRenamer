@@ -81,6 +81,7 @@ std::vector<PlanInput> RenameSession::pendingInputs(std::vector<std::size_t>& ro
         in.skip = r.skip;
         in.date = r.date;
         in.number = r.number;
+        if (r.isDocument()) in.document = r.document;
         if (r.accountId)
             if (const Account* a = findAccount(*r.accountId)) in.account = *a;
         inputs.push_back(std::move(in));
@@ -111,8 +112,15 @@ bool RenameSession::carryForward(std::size_t from, std::size_t to)
     const SessionRow& src = rows_[from];
     SessionRow& dst = rows_[to];
     if (dst.done || !dst.isBlank() || src.skip) return false;
+    if (src.isDocument()) {
+        dst.document = src.document;
+        dst.document.description.clear();
+        dst.date = src.date;
+        return true;
+    }
     if (!src.accountId && !src.date) return false;
 
+    dst.document = DocumentInfo{};
     dst.accountId = src.accountId;
     dst.number = src.number;
     if (src.date) dst.date = nextDateSpec(*src.date);
@@ -129,7 +137,7 @@ std::optional<std::size_t> RenameSession::nextPending(std::size_t from) const
 bool RenameSession::hasUnappliedEntries() const
 {
     for (const SessionRow& r : rows_)
-        if (!r.done && (r.accountId || r.date)) return true;
+        if (!r.done && (r.accountId || r.date || !r.document.isBlank())) return true;
     return false;
 }
 

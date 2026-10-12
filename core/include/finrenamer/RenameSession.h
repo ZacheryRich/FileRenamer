@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "finrenamer/DateSpec.h"
+#include "finrenamer/DocumentName.h"
 #include "finrenamer/Models.h"
 #include "finrenamer/RenameEngine.h"
 #include "finrenamer/RenamePlan.h"
@@ -20,12 +21,16 @@ struct SessionRow {
     std::filesystem::path originalPath;  // where it was when first listed
     std::optional<std::int64_t> accountId;
     std::string number;  // a previous number of that account; empty = current
+    // An email, text, letter or other file (kind != Statement): named from this
+    // instead of the account. A statement keeps kind Statement.
+    DocumentInfo document;
     std::optional<DateSpec> date;
     bool skip = false;
     bool done = false;     // renamed during this session; `path` is the new location
     std::string failure;   // why the last Apply couldn't rename it, if it failed
 
-    bool isBlank() const { return !accountId && !date && !skip; }
+    bool isBlank() const { return !accountId && !date && !skip && document.isBlank(); }
+    bool isDocument() const { return document.kind != DocKind::Statement; }
 };
 
 struct SessionUndoResult {
@@ -61,8 +66,11 @@ public:
     std::vector<PlannedMove> preview(const PlanOptions& options) const;
 
     // Carry-forward: if row `to` is blank, give it row `from`'s account (and
-    // chosen number) and the following date (see nextDateSpec). Returns true if
-    // anything was filled in.
+    // chosen number) and the following date (see nextDateSpec). After an email,
+    // text, letter or other file it copies the kind, label, people and the SAME
+    // date instead (the description is left blank, and the next file is more
+    // likely the same day than a month later). Returns true if anything was
+    // filled in.
     bool carryForward(std::size_t from, std::size_t to);
 
     // Index of the next row after `from` that hasn't been renamed, if any.

@@ -336,7 +336,9 @@ void DateField::updateStyle()
 DateSpecEditor::DateSpecEditor(QWidget* parent) : QWidget(parent)
 {
     mode_ = new QComboBox;
-    mode_->addItems({tr("Single date"), tr("Period"), tr("Quarter")});
+    mode_->addItem(tr("Single date"), static_cast<int>(Single));
+    mode_->addItem(tr("Period"), static_cast<int>(PeriodMode));
+    mode_->addItem(tr("Quarter"), static_cast<int>(QuarterMode));
 
     single_ = new DateField;
     periodStart_ = new DateField;
@@ -371,8 +373,8 @@ DateSpecEditor::DateSpecEditor(QWidget* parent) : QWidget(parent)
     layout->addWidget(mode_);
     layout->addWidget(pages_, 1);
 
-    connect(mode_, &QComboBox::currentIndexChanged, this, [this](int index) {
-        pages_->setCurrentIndex(index);
+    connect(mode_, &QComboBox::currentIndexChanged, this, [this] {
+        pages_->setCurrentIndex(static_cast<int>(currentMode()));
         emit changed();
     });
     for (DateField* f : {single_, periodStart_, periodEnd_})
@@ -388,7 +390,7 @@ DateSpecEditor::~DateSpecEditor()
 
 std::optional<DateSpec> DateSpecEditor::value() const
 {
-    switch (mode_->currentIndex()) {
+    switch (currentMode()) {
     case Single:
         if (const auto d = single_->date()) return SingleDate{*d};
         return std::nullopt;
@@ -410,7 +412,7 @@ std::optional<DateSpec> DateSpecEditor::value() const
 
 QString DateSpecEditor::problem() const
 {
-    switch (mode_->currentIndex()) {
+    switch (currentMode()) {
     case Single: return single_->problem();
     case PeriodMode: {
         const QString a = periodStart_->problem();
@@ -422,11 +424,39 @@ QString DateSpecEditor::problem() const
 
 bool DateSpecEditor::hasInvalidText() const
 {
-    switch (mode_->currentIndex()) {
+    switch (currentMode()) {
     case Single: return single_->hasInvalidText();
     case PeriodMode: return periodStart_->hasInvalidText() || periodEnd_->hasInvalidText();
     default: return false;
     }
+}
+
+DateSpecEditor::Mode DateSpecEditor::currentMode() const
+{
+    return static_cast<Mode>(mode_->currentData().toInt());
+}
+
+void DateSpecEditor::setMode(Mode mode)
+{
+    const int index = mode_->findData(static_cast<int>(mode));
+    if (index >= 0) mode_->setCurrentIndex(index);
+}
+
+void DateSpecEditor::setModes(bool period, bool quarter)
+{
+    const Mode keep = currentMode();
+    {
+        const QSignalBlocker block(mode_);
+        mode_->clear();
+        mode_->addItem(tr("Single date"), static_cast<int>(Single));
+        if (period) mode_->addItem(tr("Period"), static_cast<int>(PeriodMode));
+        if (quarter) mode_->addItem(tr("Quarter"), static_cast<int>(QuarterMode));
+        const int index = mode_->findData(static_cast<int>(keep));
+        mode_->setCurrentIndex(index >= 0 ? index : 0);
+        mode_->setVisible(mode_->count() > 1);  // nothing to choose between
+    }
+    pages_->setCurrentIndex(static_cast<int>(currentMode()));
+    if (currentMode() != keep) emit changed();
 }
 
 void DateSpecEditor::setValue(const std::optional<DateSpec>& spec)
@@ -442,24 +472,24 @@ void DateSpecEditor::setValue(const std::optional<DateSpec>& spec)
 
     if (spec) {
         if (const auto* s = std::get_if<SingleDate>(&*spec)) {
-            mode_->setCurrentIndex(Single);
+            setMode(Single);
             single_->setDate(s->date);
         } else if (const auto* p = std::get_if<Period>(&*spec)) {
-            mode_->setCurrentIndex(PeriodMode);
+            setMode(PeriodMode);
             periodStart_->setDate(p->start);
             periodEnd_->setDate(p->end);
         } else if (const auto* q = std::get_if<Quarter>(&*spec)) {
-            mode_->setCurrentIndex(QuarterMode);
+            setMode(QuarterMode);
             quarter_->setCurrentIndex(q->quarter);
             quarterYear_->setText(QString::number(q->year));
         }
     }
-    pages_->setCurrentIndex(mode_->currentIndex());
+    pages_->setCurrentIndex(static_cast<int>(currentMode()));
 }
 
 void DateSpecEditor::focusFirstField()
 {
-    switch (mode_->currentIndex()) {
+    switch (currentMode()) {
     case Single: single_->focusAndSelect(); break;
     case PeriodMode: periodStart_->focusAndSelect(); break;
     case QuarterMode: quarter_->setFocus(); break;

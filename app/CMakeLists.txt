@@ -6,6 +6,7 @@ qt_standard_project_setup()  # turns on AUTOMOC (needed for Q_OBJECT classes)
 qt_add_library(finrenamer_ui STATIC
     QtHelpers.h
     HomeWindow.h HomeWindow.cpp
+    BatesDialog.h BatesDialog.cpp
     CasePickerDialog.h CasePickerDialog.cpp
     MainWindow.h MainWindow.cpp
     CaseDialog.h CaseDialog.cpp

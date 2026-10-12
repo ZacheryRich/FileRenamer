@@ -15,13 +15,15 @@ class PdfPreview;
 class QSplitter;
 class QCheckBox;
 class QComboBox;
+class QFormLayout;
 class QGroupBox;
 class QLabel;
+class QLineEdit;
 class QPushButton;
 class QTableWidget;
 
-// The rename screen for one case: pick a folder, fill in an account and date
-// for each PDF, preview the new names, and apply.
+// The rename screen for one case: pick a folder, say what each PDF is (a statement
+// for an account, an email, text, letter or other file) and its date, preview the new names, and apply.
 class RenameWindow : public QDialog {
     Q_OBJECT
 public:
@@ -50,6 +52,9 @@ private:
     void selectRow(int row);
     void loadEditor();
     void commitEditor();
+    finrenamer::DocumentInfo editorDocument() const;  // the kind and typed fields as shown
+    void updateKindFields();                          // which fields the chosen kind shows
+    void kindChanged();
 
     void goToNext();
     void apply();
@@ -70,6 +75,8 @@ private:
     // Top
     QLabel* folderLabel_ = nullptr;
     QPushButton* refreshBtn_ = nullptr;
+    QPushButton* statementBtn_ = nullptr;  // opens statementDialog_
+    QDialog* statementDialog_ = nullptr;   // "Statement Options": folder sorting, statements only
     QCheckBox* byAccount_ = nullptr;
     QCheckBox* byYear_ = nullptr;
     QComboBox* order_ = nullptr;
@@ -79,6 +86,16 @@ private:
     QTableWidget* table_ = nullptr;
     QGroupBox* editorBox_ = nullptr;
     QLabel* fileLabel_ = nullptr;
+    QFormLayout* form_ = nullptr;
+    QComboBox* kind_ = nullptr;       // Statement / Email / Text / Letter / Other
+    QComboBox* textStyle_ = nullptr;  // single message / conversation / group chat
+    QLineEdit* label_ = nullptr;
+    QLineEdit* from_ = nullptr;
+    QLineEdit* to_ = nullptr;
+    QLineEdit* description_ = nullptr;
+    QWidget* accountBox_ = nullptr;
+    QWidget* numberBox_ = nullptr;
+    std::vector<QWidget*> editFields_;  // everything that is locked once a file is renamed or skipped
     QComboBox* account_ = nullptr;
     QComboBox* number_ = nullptr;  // the chosen account's numbers; "" data = current
     std::vector<finrenamer::Account> accounts_;

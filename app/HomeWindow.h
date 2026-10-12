@@ -6,7 +6,7 @@
 
 class QPushButton;
 
-// The start screen: Case List, File Renamer and Deficiency List. File Renamer and
+// The start screen: Case List, File Renamer, Deficiency List and Bates Log. File Renamer and
 // Deficiency List ask which case to use; Case List opens the case manager.
 class HomeWindow : public QMainWindow {
     Q_OBJECT
@@ -17,6 +17,7 @@ public:
     void openCaseList();
     void openFileRenamer();
     void openDeficiencyList();
+    void openBatesLog();
 
 protected:
     void closeEvent(QCloseEvent* event) override;

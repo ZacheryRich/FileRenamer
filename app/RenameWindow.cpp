@@ -1,8 +1,11 @@
 #include "RenameWindow.h"
 
+#include <algorithm>
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDesktopServices>
+#include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -10,6 +13,7 @@
 #include <QHeaderView>
 #include <QKeySequence>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSettings>
@@ -61,6 +65,7 @@ StatusView describe(const SessionRow& row, const PlannedMove& move)
     case MoveStatus::Unchanged: return {QObject::tr("Already named correctly"), kGrey};
     case MoveStatus::Skipped: return {QObject::tr("Skipped"), kGrey};
     case MoveStatus::Incomplete:
+        if (!move.message.empty()) return {qstr(move.message), {}};  // what an email/text/letter still needs
         if (!row.accountId && !row.date) return {QObject::tr("Needs account and date"), {}};
         if (!row.accountId) return {QObject::tr("Needs account"), {}};
         return {QObject::tr("Needs date"), {}};
@@ -125,10 +130,36 @@ void RenameWindow::buildUi()
     folderRow->addWidget(refreshBtn_);
     folderRow->addWidget(folderLabel_, 1);
 
+    // Folder sorting is for statements only, so its settings live in their own window.
+    statementDialog_ = new QDialog(this);
+    statementDialog_->setObjectName("statementOptions");
+    statementDialog_->setWindowTitle(tr("Statement Options"));
     byAccount_ = new QCheckBox(tr("Sort into account folders"));
     byYear_ = new QCheckBox(tr("Sort into year folders"));
     order_ = new QComboBox;
     order_->addItems({tr("Account → Year"), tr("Year → Account")});
+    {
+        auto* note = new QLabel(tr("These settings apply to financial statements only.\n"
+                                   "Emails, texts, letters and other files are renamed where they are."));
+        note->setWordWrap(true);
+        auto* orderRow = new QHBoxLayout;
+        orderRow->addWidget(new QLabel(tr("Folder order:")));
+        orderRow->addWidget(order_, 1);
+        auto* closeBox = new QDialogButtonBox(QDialogButtonBox::Close);
+        closeBox->button(QDialogButtonBox::Close)->setObjectName("closeStatementOptions");
+        connect(closeBox, &QDialogButtonBox::rejected, statementDialog_, &QDialog::accept);
+        auto* layout = new QVBoxLayout(statementDialog_);
+        layout->addWidget(note);
+        layout->addSpacing(8);
+        layout->addWidget(byAccount_);
+        layout->addWidget(byYear_);
+        layout->addLayout(orderRow);
+        layout->addSpacing(8);
+        layout->addWidget(closeBox);
+    }
+    statementBtn_ = new QPushButton(tr("Statement Options..."));
+    statementBtn_->setObjectName("statementOptionsButton");
+    statementBtn_->setToolTip(tr("Sort statements into account and year folders. Applies to financial statements only."));
     collisions_ = new QComboBox;
     collisions_->addItems({tr("Add a number: \"(2)\""), tr("Don't rename it")});
 
@@ -138,10 +169,7 @@ void RenameWindow::buildUi()
     collisions_->setCurrentIndex(settings.value("sort/collisions", 0).toInt());
 
     auto* optionsRow = new QHBoxLayout;
-    optionsRow->addWidget(byAccount_);
-    optionsRow->addWidget(byYear_);
-    optionsRow->addWidget(new QLabel(tr("Folder order:")));
-    optionsRow->addWidget(order_);
+    optionsRow->addWidget(statementBtn_);
     optionsRow->addSpacing(24);
     optionsRow->addWidget(new QLabel(tr("If a name is already taken:")));
     optionsRow->addWidget(collisions_);
@@ -172,13 +200,33 @@ void RenameWindow::buildUi()
     fileLabel_->setFont(bold);
     fileLabel_->setWordWrap(true);
 
+    kind_ = new QComboBox;
+    kind_->addItem(tr("Statement"), static_cast<int>(DocKind::Statement));
+    kind_->addItem(tr("Email"), static_cast<int>(DocKind::Email));
+    kind_->addItem(tr("Text"), static_cast<int>(DocKind::Text));
+    kind_->addItem(tr("Letter"), static_cast<int>(DocKind::Letter));
+    kind_->addItem(tr("Other"), static_cast<int>(DocKind::Other));
+    kind_->setToolTip(tr("What this file is. Statements are named from an account; the others from what you type."));
+
     account_ = new QComboBox;
     account_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     account_->setMinimumContentsLength(28);
     newAccountBtn_ = new QPushButton(tr("New Account..."));
-    auto* accountRow = new QHBoxLayout;
+    accountBox_ = new QWidget;
+    auto* accountRow = new QHBoxLayout(accountBox_);
+    accountRow->setContentsMargins(0, 0, 0, 0);
     accountRow->addWidget(account_, 1);
     accountRow->addWidget(newAccountBtn_);
+
+    textStyle_ = new QComboBox;
+    textStyle_->addItem(tr("One message"), static_cast<int>(TextStyle::Single));
+    textStyle_->addItem(tr("Conversation (two people)"), static_cast<int>(TextStyle::Conversation));
+    textStyle_->addItem(tr("Group chat"), static_cast<int>(TextStyle::Group));
+    label_ = new QLineEdit;
+    from_ = new QLineEdit;
+    to_ = new QLineEdit;
+    description_ = new QLineEdit;
+    description_->setPlaceholderText(tr("Optional"));
 
     date_ = new DateSpecEditor;
 
@@ -193,28 +241,37 @@ void RenameWindow::buildUi()
     openBtn_ = new QPushButton(tr("&Open PDF"));
     openBtn_->setToolTip(tr("Open in your PDF viewer (Ctrl+O). Close it again before applying."));
     nextBtn_ = new QPushButton(tr("Next File  ▶"));
-    nextBtn_->setToolTip(tr("Enter: go to the next file, carrying this account and the next date forward"));
+    nextBtn_->setToolTip(tr("Enter: go to the next file, carrying this account (or these details) forward"));
 
     auto* editorButtons = new QHBoxLayout;
     editorButtons->addWidget(openBtn_);
     editorButtons->addStretch();
     editorButtons->addWidget(nextBtn_);
 
-    auto* hint = new QLabel(tr("Enter: next file (account and next date carry forward)\n"
+    auto* hint = new QLabel(tr("Enter: next file (the account or details carry forward)\n"
                                "Ctrl+Enter: apply    Double-click a file: open it"));
     hint->setStyleSheet("color: palette(placeholder-text);");
 
-    auto* form = new QFormLayout;
+    form_ = new QFormLayout;
+    auto* form = form_;
     number_ = new QComboBox;
     number_->setObjectName("number");
     number_->setToolTip(tr("The account number this statement shows. Older numbers are for "
                            "statements from before the number changed."));
-    auto* numberRow = new QHBoxLayout;
+    numberBox_ = new QWidget;
+    auto* numberRow = new QHBoxLayout(numberBox_);
+    numberRow->setContentsMargins(0, 0, 0, 0);
     numberRow->addWidget(number_);
     numberRow->addStretch();
 
-    form->addRow(tr("Account:"), accountRow);
-    form->addRow(tr("Number:"), numberRow);
+    form->addRow(tr("Type:"), kind_);
+    form->addRow(tr("Account:"), accountBox_);
+    form->addRow(tr("Number:"), numberBox_);
+    form->addRow(tr("Kind of text:"), textStyle_);
+    form->addRow(tr("Label:"), label_);
+    form->addRow(tr("From:"), from_);
+    form->addRow(tr("To:"), to_);
+    form->addRow(tr("Description:"), description_);
     form->addRow(tr("Date:"), date_);
     form->addRow(QString(), skip_);
 
@@ -266,7 +323,15 @@ void RenameWindow::buildUi()
     layout->addWidget(mainSplitter_, 1);
     layout->addLayout(bottom);
 
+    editFields_ = {kind_, account_, newAccountBtn_, textStyle_, label_, from_, to_, description_, date_};
+
     // Names for automated GUI tests.
+    kind_->setObjectName("kind");
+    textStyle_->setObjectName("textStyle");
+    label_->setObjectName("label");
+    from_->setObjectName("from");
+    to_->setObjectName("to");
+    description_->setObjectName("description");
     table_->setObjectName("files");
     account_->setObjectName("account");
     date_->setObjectName("date");
@@ -285,6 +350,7 @@ void RenameWindow::buildUi()
     // ---- Wiring ----
     connect(chooseBtn, &QPushButton::clicked, this, &RenameWindow::promptForFolder);
     connect(refreshBtn_, &QPushButton::clicked, this, &RenameWindow::refreshFolder);
+    connect(statementBtn_, &QPushButton::clicked, this, [this] { statementDialog_->exec(); });
     for (auto* box : {byAccount_, byYear_})
         connect(box, &QCheckBox::toggled, this, [this] { saveSettings(); updatePreview(); });
     for (auto* combo : {order_, collisions_})
@@ -302,6 +368,10 @@ void RenameWindow::buildUi()
         commitEditor();
     });
     connect(number_, &QComboBox::currentIndexChanged, this, &RenameWindow::commitEditor);
+    connect(kind_, &QComboBox::currentIndexChanged, this, &RenameWindow::kindChanged);
+    connect(textStyle_, &QComboBox::currentIndexChanged, this, &RenameWindow::kindChanged);
+    for (auto* edit : {label_, from_, to_, description_})
+        connect(edit, &QLineEdit::textChanged, this, &RenameWindow::commitEditor);
     connect(date_, &DateSpecEditor::changed, this, &RenameWindow::commitEditor);
     connect(skip_, &QCheckBox::toggled, this, &RenameWindow::commitEditor);
     connect(newAccountBtn_, &QPushButton::clicked, this, &RenameWindow::newAccount);
@@ -465,8 +535,14 @@ void RenameWindow::updatePreview()
         nameItem->setToolTip(name);
 
         QTableWidgetItem* folderItem = cell(table_, r, ColFolder);
-        folderItem->setText(folder == QStringLiteral(".") ? QString() : folder);
-        folderItem->setToolTip(folderItem->text());
+        if (row.isDocument() && showName) {
+            // Account and year folders are for statements only.
+            folderItem->setText(tr("(stays here)"));
+            folderItem->setToolTip(tr("Emails, texts, letters and other files are renamed where they are."));
+        } else {
+            folderItem->setText(folder == QStringLiteral(".") ? QString() : folder);
+            folderItem->setToolTip(folderItem->text());
+        }
 
         QTableWidgetItem* statusItem = cell(table_, r, ColStatus);
         statusItem->setText(status.text);
@@ -476,7 +552,7 @@ void RenameWindow::updatePreview()
         const QBrush rowBrush = row.done ? QBrush(kGrey) : QBrush();
         cell(table_, r, ColFile)->setForeground(rowBrush);
         nameItem->setForeground(rowBrush);
-        folderItem->setForeground(rowBrush);
+        folderItem->setForeground(row.isDocument() ? QBrush(kGrey) : rowBrush);
     }
     // The folder column only matters when sorting into subfolders.
     table_->setColumnHidden(ColFolder, !byAccount_->isChecked() && !byYear_->isChecked());
@@ -566,8 +642,8 @@ void RenameWindow::loadEditor()
         skip_->setChecked(false);
         rowStatus_->clear();
         pdf_->clear();
-        for (QWidget* w : std::initializer_list<QWidget*>{account_, newAccountBtn_, date_, skip_, openBtn_, nextBtn_})
-            w->setEnabled(false);
+        for (QWidget* w : editFields_) w->setEnabled(false);
+        for (QWidget* w : std::initializer_list<QWidget*>{skip_, openBtn_, nextBtn_}) w->setEnabled(false);
         fillNumbers(std::nullopt, {});
         loadingEditor_ = false;
         return;
@@ -580,13 +656,19 @@ void RenameWindow::loadEditor()
 
     const int index = accountIndex(row.accountId);
     account_->setCurrentIndex(index >= 0 ? index : 0);
+    kind_->setCurrentIndex(std::max(0, kind_->findData(static_cast<int>(row.document.kind))));
+    textStyle_->setCurrentIndex(std::max(0, textStyle_->findData(static_cast<int>(row.document.textStyle))));
+    label_->setText(qstr(row.document.label));
+    from_->setText(qstr(row.document.sender));
+    to_->setText(qstr(row.document.recipient));
+    description_->setText(qstr(row.document.description));
+    updateKindFields();  // before the date is set, so the date box offers the right modes
     date_->setValue(row.date);
     skip_->setChecked(row.skip);
 
     const bool editable = !row.done;
     skip_->setEnabled(editable);
-    for (QWidget* w : std::initializer_list<QWidget*>{account_, newAccountBtn_, date_})
-        w->setEnabled(editable && !row.skip);
+    for (QWidget* w : editFields_) w->setEnabled(editable && !row.skip);
     fillNumbers(row.accountId, row.number);
     openBtn_->setEnabled(true);
     nextBtn_->setEnabled(true);
@@ -606,14 +688,95 @@ void RenameWindow::commitEditor()
     const QVariant id = account_->currentData(kAccountIdRole);
     row.accountId = id.isValid() ? std::optional<std::int64_t>(id.toLongLong()) : std::nullopt;
     row.number = row.accountId ? stdstr(number_->currentData(kNumberRole).toString()) : std::string();
+    row.document = editorDocument();
     row.date = date_->value();
     row.skip = skip_->isChecked();
     row.failure.clear();
 
-    for (QWidget* w : std::initializer_list<QWidget*>{account_, newAccountBtn_, date_})
-        w->setEnabled(!row.skip);
+    for (QWidget* w : editFields_) w->setEnabled(!row.skip);
     number_->setEnabled(!row.skip && number_->count() > 1);
     updatePreview();
+}
+
+DocumentInfo RenameWindow::editorDocument() const
+{
+    DocumentInfo d;
+    d.kind = static_cast<DocKind>(kind_->currentData().toInt());
+    d.textStyle = static_cast<TextStyle>(textStyle_->currentData().toInt());
+    d.label = stdstr(label_->text());
+    d.sender = stdstr(from_->text());
+    d.recipient = stdstr(to_->text());
+    d.description = stdstr(description_->text());
+    return d;
+}
+
+// Shows only the fields the chosen kind uses, with captions to match, and limits
+// the date box to the modes that kind accepts.
+void RenameWindow::updateKindFields()
+{
+    const DocumentInfo info = editorDocument();
+    const bool statement = info.kind == DocKind::Statement;
+    const bool text = info.kind == DocKind::Text;
+    const bool hasLabel = text || info.kind == DocKind::Letter || info.kind == DocKind::Other;
+    const bool hasFrom = info.kind == DocKind::Email || text || info.kind == DocKind::Letter;
+    const bool hasTo = info.kind == DocKind::Email ||
+                       (text && info.textStyle != TextStyle::Group);
+    const bool hasDescription = !statement;
+
+    form_->setRowVisible(accountBox_, statement);
+    form_->setRowVisible(numberBox_, statement);
+    form_->setRowVisible(textStyle_, text);
+    form_->setRowVisible(label_, hasLabel);
+    form_->setRowVisible(from_, hasFrom);
+    form_->setRowVisible(to_, hasTo);
+    form_->setRowVisible(description_, hasDescription);
+
+    auto caption = [this](QWidget* field, const QString& textValue) {
+        if (auto* l = qobject_cast<QLabel*>(form_->labelForField(field))) l->setText(textValue);
+    };
+    QString fromCaption = tr("From:"), toCaption = tr("To:"), labelCaption = tr("Label:");
+    QString labelHint, fromHint = tr("Name"), toHint = tr("Name");
+    if (text) {
+        labelCaption = tr("Label:");
+        labelHint = tr("Texts, WhatsApp, Our Family Wizard...");
+        if (info.textStyle == TextStyle::Conversation) {
+            fromCaption = tr("Between:");
+            toCaption = tr("and:");
+        } else if (info.textStyle == TextStyle::Group) {
+            fromCaption = tr("With:");
+            fromHint = tr("The people, or the group's name");
+        }
+    } else if (info.kind == DocKind::Letter) {
+        labelHint = tr("Ltr");
+    } else if (info.kind == DocKind::Other) {
+        labelHint = tr("What it is, e.g. Photo, Court Order, Invoice");
+    }
+    caption(from_, fromCaption);
+    caption(to_, toCaption);
+    caption(label_, labelCaption);
+    label_->setPlaceholderText(labelHint);
+    from_->setPlaceholderText(fromHint);
+    to_->setPlaceholderText(toHint);
+
+    const DateModes modes = allowedDateModes(info);
+    date_->setModes(modes.period, modes.quarter);
+}
+
+void RenameWindow::kindChanged()
+{
+    if (loadingEditor_) return;
+    // A kind's usual label is filled in, unless the user has typed their own.
+    const DocKind kind = static_cast<DocKind>(kind_->currentData().toInt());
+    const QString current = label_->text().trimmed();
+    if (current.isEmpty() || current == qstr(std::string(kDefaultTextLabel)) ||
+        current == qstr(std::string(kDefaultLetterLabel))) {
+        const QSignalBlocker block(label_);
+        label_->setText(kind == DocKind::Text     ? qstr(std::string(kDefaultTextLabel))
+                        : kind == DocKind::Letter ? qstr(std::string(kDefaultLetterLabel))
+                                                  : QString());
+    }
+    updateKindFields();
+    commitEditor();
 }
 
 void RenameWindow::goToNext()

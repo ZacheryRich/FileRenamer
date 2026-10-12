@@ -17,8 +17,8 @@ financial statements as PDFs and has to rename and organize them per client case
 Everything is local: no network, data stored on the user's own machine.
 
 Workflow: create a **case** (client) → it has **people** and **accounts** →
-open the **rename screen**, pick a folder of PDFs → for each file choose an
-account and a date (or skip it) → preview → **Apply** renames (and optionally
+open the **rename screen**, pick a folder of PDFs → for each file choose what it is
+(a statement for an account, an email, text, letter or other file) and a date (or skip it) → preview → **Apply** renames (and optionally
 sorts into subfolders) → **Undo** if needed.
 
 ## The user and environment
@@ -85,9 +85,48 @@ sorts into subfolders) → **Undo** if needed.
   (`recordMemberChange`); a member that only got a newer number records just the
   folder name, as for single accounts.
 
+## File types on the rename screen (decided with the user)
+
+The rename screen's **Type** dropdown: **Statement** (the account-based name above, the
+default), **Email**, **Text**, **Letter**, **Other**. Every name starts with the date in the
+same `YYYY.MM.DD` format; everything after it is typed by the user (free-text boxes, cleaned
+with `sanitizeComponent`), except the fixed words shown. The description is **always
+optional** and its parentheses drop out when blank; every other box below is required.
+
+| Type | Name | Dates offered |
+|---|---|---|
+| Email | `2026.01.31 Email from [Sender] to [Recipient] ([Description]).pdf` | single date |
+| Text, one message | `[Date] [Label] from [Sender] to [Recipient] ([Description])` | single date |
+| Text, conversation | `[Date] [Label] between [Person] and [Person] ([Description])` | single or period |
+| Text, group chat | `[Date] [Label] with [People or group name] ([Description])` | single or period |
+| Letter | `[Date] [Label] from [Sender] ([Description])` -- no recipient box | single date |
+| Other | `[Date] [Label] ([Description])` -- no people boxes | single or period |
+
+- The **label** is a text box, not a fixed word, so the user can type `WhatsApp`, `Our Family
+  Wizard`, `Court Order`... It is pre-filled with **`Texts`** for Text and **`Ltr`** for Letter
+  (replaced by the other kind's default if the user hasn't typed their own); blank for Other
+  and **required** there. Emails always say `Email`.
+- Quarters are for statements only. Dates beyond what a kind offers are rejected (`validateDocumentDate`).
+- **Folder sorting is for statements only** (user's rule): emails, texts, letters and other files
+  get neither account nor year folders -- they are renamed where they are (`buildPlan` uses the
+  source folder for them). Their "Into folder" cell reads grey "(stays here)".
+- **Carry-forward** after a non-statement copies the kind, label, people and the **same date**
+  (not a month later), and leaves the description blank.
+- Missing fields show in the Status column, e.g. "Needs sender, recipient and a date"
+  (`documentMissing`, delivered through `PlannedMove::message` on `Incomplete`).
+- Code: `core/DocumentName` (`DocKind`, `TextStyle`, `DocumentInfo`, `buildDocumentFilename`);
+  `PlanInput::document` and `SessionRow::document` (kind `Statement` = use the account).
+  Nothing about these is stored in the database. Not yet covered: the Deficiency List and
+  Update File Names only know statements, so these files show up under "Files Not Matched".
+
 ## Subfolder sorting
 
-- Optional: by account, by year, or both (order: Account→Year or Year→Account).
+- Optional: by account, by year, or both (order: Account→Year or Year→Account). **Statements
+  only.** The settings live in the **Statement Options...** window (button in the rename screen's
+  options row; dialog "statementOptions", close button "closeStatementOptions", button
+  "statementOptionsButton"; checkboxes "byAccount"/"byYear" are inside it). User's choice: a
+  separate window, and **no summary label beside the button**. The "If a name is already taken"
+  choice stays on the main screen (it applies to every file type).
 - Account folder name = the **full label** (same as the filename minus the date),
   plus `(was x...)` after the number when the account has previous numbers
   (`accountFolderLabel()`): `BofA Checking x1234 (J)`, `Chase Credit Card x5678 (was x1234) (H)`.
@@ -182,6 +221,33 @@ sorts into subfolders) → **Undo** if needed.
   (`DocxWriter.cpp`): no library. Range/options remembered per case in settings.ini
   under `deficiency/case<id>/...`.
 
+- **Bates Log** (start-screen tile; `BatesDialog`; no case needed): ported from the user's
+  earlier "Bates Log Excel Updater" (Win32/ImGui, OpenXLSX) and extended. One spreadsheet,
+  two jobs, **the Bates log is optional** (user's request: List Files stands alone; the Bates
+  group is titled "Add Bates numbers (optional)" and its button stays disabled until a log is
+  chosen). **With no log chosen, List Files writes only the "Name" header** (no Begin/End Bates
+  headers in B/C; `writeListing(..., batesColumns=false)`); with a log chosen it writes all three.
+  Add Bates Numbers adds the B/C headers later if they're missing. **List Files** writes every file in a chosen folder *and its subfolders* into
+  the spreadsheet in the layout of the user's sample "Bates Log.xlsx": row 1 header
+  (**Name | Begin Bates | End Bates**, bold on light grey E6E6E6), row 2 blank, then per
+  folder a bold folder row (`/` = the listed folder itself, then `/Folder 1`,
+  `/Folder 1/Sub 1`), its file names in column A, and one blank row between folders. Order:
+  depth first, names in plain character order (so `Z` before `a`, as in the sample), folders
+  with no files directly in them are left out, every file type is listed (mp4, m4a, ...)
+  except Office lock files `~$...`, Thumbs.db, desktop.ini, .DS_Store and the spreadsheet
+  itself. New name -> a new workbook (font Aptos Narrow 11, like the sample); existing file ->
+  **a fresh listing is appended at the bottom** after one blank row, even if some files are
+  already listed (user's choice over merging); column A is only ever added to. **Add Bates
+  Numbers** reads Adobe's tab-separated log (`name<TAB>begin<TAB>end`; UTF-8, UTF-16 BOM or
+  ANSI) and writes Begin Bates / End Bates into B and C of every file row whose name matches
+  (`matchKey`: control chars and outer spaces dropped, one trailing `.pdf` dropped, letter case
+  ignored -- the old program was case-sensitive and stripped all non-ASCII). Rows not in the
+  log are left alone (numbers already there stay), headers B1/C1 are added if missing. The
+  dialog reports files not in the log, log entries not in the sheet, repeated log names, and
+  names on more than one row (same numbers on all). Matching is by file name only (the log
+  has no folder). Numbers are written as text. Needs the workbook closed in Excel.
+  Paths remembered in settings.ini under `bates/workbook|folder|log`.
+
 ## Layout of the code
 
     CMakeLists.txt          options FINRENAMER_BUILD_APP / FINRENAMER_BUILD_TESTS
@@ -191,7 +257,8 @@ sorts into subfolders) → **Undo** if needed.
       DateSpec              variant<SingleDate, Period, Quarter>; format, validate,
                             filingYear, nextDateSpec (carry-forward), parseUserDate
       FilenameBuilder       sanitizeComponent, accountLabel, buildFilename, validateAccount
-      FolderPlanner         subfolderFor(account, date, SortOptions)
+      DocumentName          DocKind/TextStyle/DocumentInfo; names for email, text, letter, other files
+      FolderPlanner         subfolderFor(account, date, SortOptions) -- statements only; documents get no subfolder
       FileScanner           listPdfFiles (top level, case-insensitive .pdf, sorted)
       NameFixer             planNameFixes(roots, accounts, oldNames, options): in-place renames
       RenamePlan            buildPlan(): preview, read-only. Statuses: Ready, Unchanged,
@@ -204,16 +271,20 @@ sorts into subfolders) → **Undo** if needed.
       LooseStatementNames   findLooseDate, LooseNameMatcher: forgiving date/account reader for old names
       StatementCoverage     scanStatements (months covered per account), analyzeCoverage (per year)
       DeficiencyReport      buildDeficiencyReport (plain-text model), writeDocx/docxBytes (DocxWriter.cpp)
+      DirectoryListing      listDirectoryTree (folders + files, sample order), isIgnoredFileName
+      BatesLog              parseBatesLog / matchKey: Acrobat's Bates log reader
+      BatesSheet            writeListing, applyBatesLog: the .xlsx layout, via OpenXLSX
       Database              SQLite via SQLiteCpp (pimpl; not exposed in headers)
       Utf8Path              pathFromUtf8 / utf8FromPath / utf16Length / caseFoldKey
     app/                    Qt Widgets GUI (static lib finrenamer_ui + FinRenamer.exe)
       main.cpp              opens the DB in AppData, shows HomeWindow
-      HomeWindow            start screen: Case List / File Renamer / Deficiency List tiles
+      HomeWindow            start screen: Case List / File Renamer / Deficiency List / Bates Log tiles
+      BatesDialog           Bates Log: spreadsheet + List Files + Add Bates Numbers
       CasePickerDialog      "Choose a Case" (filter list; remembers home/lastCase; "New Case..." button "newCase" creates + selects + continues; opens straight into it when there are no cases) for the last two tiles
       MainWindow            the Case List: cases list | people table + accounts table; File menu
       CaseDialog, PersonDialog, AccountDialog
       RenameWindow          the rename screen (table + editor left, preview right)
-      DateWidgets           DateField (Year/Month/Day boxes + calendar), DateSpecEditor (mode + inputs)
+      DateWidgets           DateField (Year/Month/Day boxes + calendar), DateSpecEditor (mode + inputs; setModes limits the modes)
       PdfPreview            QPdfView preview; compiled only with FINRENAMER_HAVE_QTPDF
       HistoryDialog         File > Rename History, undo any batch
       CaseFolderList        shared per-case folder list (Add/Remove/drag; settings key updateNames/case<id>/folders)
@@ -221,11 +292,13 @@ sorts into subfolders) → **Undo** if needed.
       DeficiencyDialog      Deficiency List: range, options, accounts, preview, Save as Word
       QtHelpers.h           qstr/stdstr/toPath/qpath, settingsFile, personLabel,
                             disconnectChildren, runGuarded
-    tests/                  Catch2 v3 (106 tests): core + Database + RenameSession + NameFixer
+    tests/                  Catch2 v3 (126 tests): core + Database + RenameSession + NameFixer + BatesSheet + DocumentName
     installer/FinRenamer.iss  Inno Setup script
 
-Dependencies: Qt 6.12 (Widgets, optional Pdf/PdfWidgets), SQLiteCpp 3.3.3 and
-Catch2 3.7.1 (vcpkg if present, else FetchContent from GitHub).
+Dependencies: Qt 6.12 (Widgets, optional Pdf/PdfWidgets), SQLiteCpp 3.3.3, OpenXLSX
+(pinned commit c1220f3, reads/writes .xlsx; core links it PRIVATE) and Catch2 3.7.1 (vcpkg if
+present, else FetchContent from GitHub). OpenXLSX itself fetches pugixml, miniz and nowide.
+Only compile-checked/run on Linux/GCC so far -- the first MSVC build of OpenXLSX is the user's.
 
 ## Conventions (follow these)
 
@@ -251,7 +324,7 @@ Catch2 3.7.1 (vcpkg if present, else FetchContent from GitHub).
   `Account{id, caseId, institution, institutionDisplay, accountType, lastFour, owners, previousLastFour, combined, openedOn, closedOn}`,
   `AccountRecord{id, caseId, institution, institutionDisplay, accountType, lastFour, ownerIds, previousLastFour, memberIds, openedOn, closedOn}`,
   `CombinedPart{accountId, accountType, lastFour}`,
-  `PlanInput{source, account, date, skip, number}`.
+  `PlanInput{source, account, date, skip, number, document}`.
 - `updateAccount(record, numberCorrections)`: history rows store, for each old file
   name, the number files with that name should **now** use (corrected text, or the
   same number); the fixer falls back to the current number if the account no
@@ -261,13 +334,14 @@ Catch2 3.7.1 (vcpkg if present, else FetchContent from GitHub).
   Names won't find files named the old way.
 - Key rename-screen widgets have `objectName`s ("files", "account", "number", "date",
   "singleDate" (its boxes "year", "month", "day"), "quarter", "quarterYear", "skip", "next", "apply", "undo",
-  "summary", "byAccount", "byYear", "preview") for automated GUI tests.
-- **Start screen** (`HomeWindow`, what `main.cpp` shows): three tiles -- **Case List**
+  "summary", "byAccount", "byYear", "preview", and for the file types "kind", "textStyle", "label", "from",
+  "to", "description") for automated GUI tests.
+- **Start screen** (`HomeWindow`, what `main.cpp` shows): four tiles -- **Case List**
   (opens `MainWindow`, hiding the start screen until it's closed), **File Renamer** (the
   rename screen; the program's name for it is "File Renamer", not "Rename Files") and
-  **Deficiency List**; the last two ask which case via `CasePickerDialog` (last case
+  **Deficiency List** and **Bates Log**; File Renamer and Deficiency List ask which case via `CasePickerDialog` (last case
   preselected). Closing the start screen quits the app (`quitOnLastWindowClosed` is off).
-  objectNames: "caseList", "fileRenamer", "deficiencyList"; picker: "filter", "cases", "newCase".
+  objectNames: "caseList", "fileRenamer", "deficiencyList", "batesLog"; picker: "filter", "cases", "newCase".
   **Look** (user asked for the start screen and Case List to match the File Renamer):
   stock Fusion widgets, boxed panels (`QGroupBox`: Cases / People / Accounts), a
   1.5x bold title, and the File Renamer's footer -- information on the left (data
@@ -276,6 +350,8 @@ Catch2 3.7.1 (vcpkg if present, else FetchContent from GitHub).
 - Account dialog objectNames: "statementType", "members", "memberChoice", "addMember", "numbers", "openedOn", "closedOn".
 - Deficiency dialog objectNames: "folders", "subfolders", "fromMonth", "fromYear", "toMonth", "toYear",
   "present", "found", "missing", "accounts", "preview", "summary", "unmatched", "loose", "save".
+- Bates dialog objectNames: "workbook", "folder", "logFile", "browseWorkbook", "browseFolder", "browseLog",
+  "listFiles", "addBates", "results", "openSheet", "close".
 - The PDF preview reads the file into memory (QBuffer) so it never locks the file
   against renaming.
 
@@ -310,7 +386,8 @@ Catch2 3.7.1 (vcpkg if present, else FetchContent from GitHub).
 Done: core logic, database, case/people/account management, rename screen
 (carry-forward, skip, sorting, partial apply, undo last, refresh), rename history,
 PDF preview, installer, previous account numbers, Update File Names (multi-folder,
-in place), Year/Month/Day date boxes, combined statements, Deficiency List (Word report).
+in place), Year/Month/Day date boxes, combined statements, Deficiency List (Word report), Bates Log (list files to Excel, add Bates numbers), file types on the rename screen
+(email / text / letter / other).
 
 Ideas discussed, not built yet (user's choice of order):
 1. Real-world trial on copies of client folders; fix friction found.

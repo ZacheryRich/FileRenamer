@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "finrenamer/DateSpec.h"
+#include "finrenamer/DocumentName.h"
 #include "finrenamer/FolderPlanner.h"
 #include "finrenamer/Models.h"
 
@@ -19,6 +20,9 @@ struct PlanInput {
     std::optional<DateSpec> date;
     bool skip = false;   // leave this file exactly as it is
     std::string number;  // one of the account's previous numbers; empty = current
+    // An email, text, letter or other file: named from this instead of the account.
+    // Unset (or kind Statement) = a statement, named from `account`.
+    std::optional<DocumentInfo> document;
 };
 
 enum class CollisionPolicy {
@@ -36,7 +40,7 @@ enum class MoveStatus {
     Ready,       // will be renamed/moved on Apply
     Unchanged,   // already has the right name and location
     Skipped,     // user chose to leave this file alone
-    Incomplete,  // account or date not chosen yet
+    Incomplete,  // account/details or date not entered yet (PlannedMove::message may say what)
     Collision,   // destination taken (Block policy only)
     Error,       // invalid input, path too long, etc.
 };

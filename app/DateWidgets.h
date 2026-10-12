@@ -68,10 +68,17 @@ public:
 
     void focusFirstField();
 
+    // Which of Single date / Period / Quarter are offered (Single always is). If
+    // the current one is no longer offered it falls back to Single date.
+    void setModes(bool period, bool quarter);
+
 signals:
     void changed();
 
 private:
+    Mode currentMode() const;
+    void setMode(Mode mode);
+
     QComboBox* mode_ = nullptr;
     QStackedWidget* pages_ = nullptr;
     DateField* single_ = nullptr;

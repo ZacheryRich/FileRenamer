@@ -8,6 +8,7 @@
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 
+#include "BatesDialog.h"
 #include "CasePickerDialog.h"
 #include "DeficiencyDialog.h"
 #include "MainWindow.h"
@@ -48,6 +49,8 @@ HomeWindow::HomeWindow(Database& db, const QString& dataFolder, QWidget* parent)
     auto* renamer = makeTile("fileRenamer", tr("File Renamer"), tr("Rename a folder of statements for a case"));
     auto* deficiency = makeTile("deficiencyList", tr("Deficiency List"), tr("Find missing statements; save a Word report"));
 
+    auto* bates = makeTile("batesLog", tr("Bates Log"), tr("List a folder's files in Excel; add Bates numbers from Acrobat's log"));
+
     auto* central = new QWidget;
     auto* layout = new QVBoxLayout(central);
     layout->addWidget(heading);
@@ -56,6 +59,7 @@ HomeWindow::HomeWindow(Database& db, const QString& dataFolder, QWidget* parent)
     layout->addWidget(cases);
     layout->addWidget(renamer);
     layout->addWidget(deficiency);
+    layout->addWidget(bates);
     layout->addStretch();
 
     // Footer like the File Renamer's: information on the left, Close on the right.
@@ -75,7 +79,8 @@ HomeWindow::HomeWindow(Database& db, const QString& dataFolder, QWidget* parent)
     connect(cases, &QPushButton::clicked, this, &HomeWindow::openCaseList);
     connect(renamer, &QPushButton::clicked, this, &HomeWindow::openFileRenamer);
     connect(deficiency, &QPushButton::clicked, this, &HomeWindow::openDeficiencyList);
-    resize(520, 400);
+    connect(bates, &QPushButton::clicked, this, &HomeWindow::openBatesLog);
+    resize(520, 470);
 }
 
 HomeWindow::~HomeWindow()
@@ -124,5 +129,11 @@ void HomeWindow::openDeficiencyList()
     if (!caseId) return;
     DeficiencyDialog dialog(db_, *caseId, this);
     if (!dialog.hasFolders() && !dialog.promptForFolder()) return;
+    dialog.exec();
+}
+
+void HomeWindow::openBatesLog()
+{
+    BatesDialog dialog(this);
     dialog.exec();
 }

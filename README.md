@@ -6,7 +6,7 @@ Renames and sorts client financial statements (PDFs) into the format
     2026.01.01 - 2026.01.31 Chase Checking x1234 (John Smith).pdf
     2026.Q1 Fidelity Brokerage 5678 (Jane Smith).pdf
 
-with optional subfolders by account (full label), by year, or both.
+with optional subfolders by account (full label), by year, or both (set in the Statement Options window; statements only -- emails, texts, letters and other files are renamed where they are).
 
 ## Status
 
@@ -18,6 +18,8 @@ with optional subfolders by account (full label), by year, or both.
 - [x] Rename screen (file table, date modes, sorting, apply/undo) and Rename History
 - [x] PDF preview pane (Qt PDF; optional at build time)
 - [x] Deficiency List: missing monthly statements per account, saved as a Word (.docx) report (no extra library)
+- [x] Rename screen file types: Statement, Email, Text, Letter and Other, each with its own name format (date first)
+- [x] Bates Log: list a folder's files (and subfolders) into an Excel sheet, then fill in Begin/End Bates from Acrobat's log
 - [x] Previous account numbers (`(was x1234)` in folder names) and Update File Names (several folders, renamed in place)
 - [x] Combined statements (`Chase Chk x1111, Sav x2222 (H)`), set up in the account dialog
 
