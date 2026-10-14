@@ -41,6 +41,16 @@ sorts into subfolders) → **Undo** if needed.
   - Period → `2026.01.01 - 2026.01.31`
   - Quarter → `2026.Q1` (user chose this over `2026.03.31 Q1`, accepting that it
     sorts after dated files in Explorer)
+  - **Month and day are optional** in a *single* date (user's request; replaced a separate
+    "Full year" mode): leave Day blank -> year and month `2026.01` (`YearMonth`), leave Month
+    and Day blank -> just the year `2026` (`WholeYear`). A day without a month is flagged
+    ("Type the month too, or clear the day.") and the row stays incomplete. Available on
+    **every** file type; periods still need full start/end dates, quarters their own box.
+    Because a bare year is now a complete date, a row turns "Ready" as soon as the year is
+    typed. Year folders use that year; carry-forward goes to the next month / next year; the
+    Deficiency List counts `2026.01` as that month and `2026` as all twelve;
+    `splitStatementName` reads both forms (`DateField::spec()` in the GUI). The loose matcher
+    does *not* read a bare year (too ambiguous).
 - **Institution** uses the account's *institution display name* if set
   (e.g. "Bank of America" → `BofA`), else the full institution name.
 - **Account type** is free text, autocompleted from types used before. **Optional**
@@ -106,7 +116,7 @@ optional** and its parentheses drop out when blank; every other box below is req
   Wizard`, `Court Order`... It is pre-filled with **`Texts`** for Text and **`Ltr`** for Letter
   (replaced by the other kind's default if the user hasn't typed their own); blank for Other
   and **required** there. Emails always say `Email`.
-- Quarters are for statements only. Dates beyond what a kind offers are rejected (`validateDocumentDate`).
+- Quarters are for statements only; **month and day are optional for every kind** (see Date modes). Dates beyond what a kind offers are rejected (`validateDocumentDate`).
 - **Folder sorting is for statements only** (user's rule): emails, texts, letters and other files
   get neither account nor year folders -- they are renamed where they are (`buildPlan` uses the
   source folder for them). Their "Into folder" cell reads grey "(stays here)".
@@ -169,6 +179,12 @@ optional** and its parentheses drop out when blank; every other box below is req
   a typo fix: the dialog passes `numberCorrections` (old -> new) to `updateAccount`,
   and files named with the old text get the corrected number. Adding, removing or
   reordering numbers needs no question (the user rejected a typo-or-new-number popup).
+- **Edit Account... on the rename screen** (button "editAccount", next to New Account..., enabled
+  when an account is chosen): opens the same `AccountDialog` as the Case List; afterwards the
+  account list and preview refresh, a row whose chosen number was removed/corrected falls back
+  to the account's current number, and the same "Update them now?" popup is offered. The
+  popup logic is shared (`accountNameSet` / `offerNameUpdate` in `UpdateNamesDialog`), used by
+  `MainWindow` too.
 - After **any account or person edit that changes a file or folder name** (institution,
   display name, type, numbers or their order, owners' display names), a popup asks
   "Update them now?" and opens Update File Names. Detected by comparing all the case's
@@ -214,7 +230,7 @@ optional** and its parentheses drop out when blank; every other box below is req
   Known limit: an abbreviation the account doesn't use (e.g. "WF" for "Wells Fargo")
   still needs the type, or the file stays under "Files Not Matched...".
   A single date covers its calendar month, a period every month it touches, a
-  quarter its three months; a combined statement credits every member account.
+  quarter its three months, a year and month just that month, a bare year all twelve; a combined statement credits every member account.
   PDFs not named like a statement are listed under "Files Not Matched...". Combined
   statements aren't listed as tables (their members are). Nothing in the folders
   is changed. Word output is a hand-written stored zip + WordprocessingML
@@ -254,7 +270,7 @@ optional** and its parentheses drop out when blank; every other box below is req
     CMakePresets.json       "vs2022" configure preset (Qt path), debug/release build presets
     core/                   static library, NO Qt -- all logic, unit-tested
       Models.h              ClientCase, Person{fullName, displayName}, Account
-      DateSpec              variant<SingleDate, Period, Quarter>; format, validate,
+      DateSpec              variant<SingleDate, Period, Quarter, WholeYear, YearMonth>; format, validate,
                             filingYear, nextDateSpec (carry-forward), parseUserDate
       FilenameBuilder       sanitizeComponent, accountLabel, buildFilename, validateAccount
       DocumentName          DocKind/TextStyle/DocumentInfo; names for email, text, letter, other files
@@ -292,7 +308,7 @@ optional** and its parentheses drop out when blank; every other box below is req
       DeficiencyDialog      Deficiency List: range, options, accounts, preview, Save as Word
       QtHelpers.h           qstr/stdstr/toPath/qpath, settingsFile, personLabel,
                             disconnectChildren, runGuarded
-    tests/                  Catch2 v3 (126 tests): core + Database + RenameSession + NameFixer + BatesSheet + DocumentName
+    tests/                  Catch2 v3 (133 tests): core + Database + RenameSession + NameFixer + BatesSheet + DocumentName
     installer/FinRenamer.iss  Inno Setup script
 
 Dependencies: Qt 6.12 (Widgets, optional Pdf/PdfWidgets), SQLiteCpp 3.3.3, OpenXLSX
@@ -333,7 +349,7 @@ Only compile-checked/run on Linux/GCC so far -- the first MSVC build of OpenXLSX
   (`Impl::recordOldNames(before, after)` inside the same transaction), or Update File
   Names won't find files named the old way.
 - Key rename-screen widgets have `objectName`s ("files", "account", "number", "date",
-  "singleDate" (its boxes "year", "month", "day"), "quarter", "quarterYear", "skip", "next", "apply", "undo",
+  "editAccount", "singleDate" (its boxes "year", "month", "day"), "quarter", "quarterYear", "mode", "skip", "next", "apply", "undo",
   "summary", "byAccount", "byYear", "preview", and for the file types "kind", "textStyle", "label", "from",
   "to", "description") for automated GUI tests.
 - **Start screen** (`HomeWindow`, what `main.cpp` shows): four tiles -- **Case List**

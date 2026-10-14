@@ -72,7 +72,7 @@ DateField::DateField(QWidget* parent) : QWidget(parent)
 {
     const char* names[3] = {"year", "month", "day"};
     const QString placeholders[3] = {tr("YYYY"), tr("MM"), tr("DD")};
-    const QString tips[3] = {tr("Year (4 digits; 26 becomes 2026)"), tr("Month (1-12)"), tr("Day")};
+    const QString tips[3] = {tr("Year (4 digits; 26 becomes 2026)"), tr("Month (1-12) - optional"), tr("Day - optional")};
     for (int i = 0; i < 3; ++i) {
         auto* e = new QLineEdit;
         e->setObjectName(QString::fromLatin1(names[i]));
@@ -168,10 +168,57 @@ std::optional<year_month_day> DateField::date() const
     return d;
 }
 
+std::optional<DateSpec> DateField::spec() const
+{
+    const QString y = parts_[Year]->text().trimmed();
+    int year = value(Year);
+    if (year < 0) return std::nullopt;
+    if (y.size() == 2) year += 2000;  // "26" before the box is tidied
+    else if (y.size() != 4 || year < 1900) return std::nullopt;
+
+    const bool haveMonth = !parts_[Month]->text().trimmed().isEmpty();
+    const bool haveDay = !parts_[Day]->text().trimmed().isEmpty();
+    if (!haveMonth && !haveDay) return WholeYear{year};
+    if (!haveMonth) return std::nullopt;  // a day needs its month
+    const int month = value(Month);
+    if (month < 1 || month > 12) return std::nullopt;
+    if (!haveDay) return YearMonth{year, month};
+    if (const auto d = date()) return SingleDate{*d};
+    return std::nullopt;
+}
+
+void DateField::setSpec(const std::optional<DateSpec>& spec)
+{
+    if (spec) {
+        if (const auto* s = std::get_if<SingleDate>(&*spec)) {
+            setDate(s->date);
+            return;
+        }
+        if (const auto* ym = std::get_if<YearMonth>(&*spec)) {
+            setDate(std::nullopt);
+            const QSignalBlocker b0(parts_[Year]), b1(parts_[Month]);
+            parts_[Year]->setText(QString::number(ym->year));
+            parts_[Month]->setText(QStringLiteral("%1").arg(ym->month, 2, 10, QLatin1Char('0')));
+            updateStyle();
+            return;
+        }
+        if (const auto* wy = std::get_if<WholeYear>(&*spec)) {
+            setDate(std::nullopt);
+            const QSignalBlocker b0(parts_[Year]);
+            parts_[Year]->setText(QString::number(wy->year));
+            updateStyle();
+            return;
+        }
+    }
+    setDate(std::nullopt);
+}
+
 QString DateField::problem() const
 {
     const QString y = parts_[Year]->text().trimmed();
     const int month = value(Month), day = value(Day);
+    if (!parts_[Day]->text().trimmed().isEmpty() && parts_[Month]->text().trimmed().isEmpty())
+        return tr("Type the month too, or clear the day.");
     if (!parts_[Year]->hasFocus() && !y.isEmpty() && y.size() != 2 && y.size() != 4)
         return tr("Type the year with 4 digits.");
     if (y.size() == 4 && value(Year) < 1900) return tr("That year is too early.");
@@ -391,9 +438,7 @@ DateSpecEditor::~DateSpecEditor()
 std::optional<DateSpec> DateSpecEditor::value() const
 {
     switch (currentMode()) {
-    case Single:
-        if (const auto d = single_->date()) return SingleDate{*d};
-        return std::nullopt;
+    case Single: return single_->spec();  // a full date, a year and month, or just a year
     case PeriodMode: {
         const auto a = periodStart_->date();
         const auto b = periodEnd_->date();
@@ -471,9 +516,10 @@ void DateSpecEditor::setValue(const std::optional<DateSpec>& spec)
     quarterYear_->clear();
 
     if (spec) {
-        if (const auto* s = std::get_if<SingleDate>(&*spec)) {
+        if (std::holds_alternative<SingleDate>(*spec) || std::holds_alternative<YearMonth>(*spec) ||
+            std::holds_alternative<WholeYear>(*spec)) {
             setMode(Single);
-            single_->setDate(s->date);
+            single_->setSpec(spec);
         } else if (const auto* p = std::get_if<Period>(&*spec)) {
             setMode(PeriodMode);
             periodStart_->setDate(p->start);

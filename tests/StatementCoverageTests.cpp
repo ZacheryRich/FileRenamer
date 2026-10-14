@@ -50,6 +50,10 @@ struct Coverage {
 TEST_CASE("A date covers the months it accounts for")
 {
     CHECK(monthsCovered(SingleDate{makeDate(2024, 1, 31)}) == std::vector<Month>{ym(2024, 1)});
+    CHECK(monthsCovered(YearMonth{2024, 5}) == std::vector<Month>{ym(2024, 5)});
+    CHECK(monthsCovered(WholeYear{2024}).size() == 12);
+    CHECK(monthsCovered(WholeYear{2024}).front() == ym(2024, 1));
+    CHECK(monthsCovered(WholeYear{2024}).back() == ym(2024, 12));
     CHECK(monthsCovered(Quarter{2024, 4}) == std::vector<Month>{ym(2024, 10), ym(2024, 11), ym(2024, 12)});
     CHECK(monthsCovered(Period{makeDate(2023, 11, 16), makeDate(2024, 1, 15)}) ==
           std::vector<Month>{ym(2023, 11), ym(2023, 12), ym(2024, 1)});
@@ -436,4 +440,24 @@ TEST_CASE("Statements named before numbers had an x still count, as ordinary mat
     CHECK(scan.matchedCount == 2);
     CHECK(scan.loose.empty());
     CHECK(c.monthsOf(scan, c.checking) == std::set<Month>{ym(2023, 5), ym(2023, 6)});
+}
+
+TEST_CASE("A full-year statement counts for all twelve months")
+{
+    Coverage c;
+    c.dir.touch("2022 Chase Checking x1234 (H).pdf");
+    const auto scan = c.scan();
+    std::set<Month> all;
+    for (unsigned m = 1; m <= 12; ++m) all.insert(ym(2022, m));
+    CHECK(c.monthsOf(scan, c.checking) == all);
+    CHECK(scan.unmatched.empty());
+}
+
+TEST_CASE("A statement dated with just a year and month counts for that month")
+{
+    Coverage c;
+    c.dir.touch("2022.03 Chase Checking x1234 (H).pdf");
+    const auto scan = c.scan();
+    CHECK(c.monthsOf(scan, c.checking) == std::set<Month>{ym(2022, 3)});
+    CHECK(scan.unmatched.empty());
 }

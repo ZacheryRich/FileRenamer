@@ -61,6 +61,8 @@ private:
     void undoLast();
     void openPdf();
     void newAccount();
+    void editAccount();
+    void updateAccountButtons();
 
     finrenamer::PlanOptions options() const;
     std::optional<std::size_t> currentRow() const;
@@ -100,6 +102,7 @@ private:
     QComboBox* number_ = nullptr;  // the chosen account's numbers; "" data = current
     std::vector<finrenamer::Account> accounts_;
     QPushButton* newAccountBtn_ = nullptr;
+    QPushButton* editAccountBtn_ = nullptr;
     DateSpecEditor* date_ = nullptr;
     QCheckBox* skip_ = nullptr;
     QPushButton* openBtn_ = nullptr;

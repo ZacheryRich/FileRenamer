@@ -59,9 +59,14 @@ std::optional<std::chrono::year_month_day> readYmd(std::string_view s, std::size
 std::optional<DateSpec> parseDateSpec(std::string_view text)
 {
     std::optional<DateSpec> spec;
-    if (text.size() == 7 && text[4] == '.' && text[5] == 'Q') {
+    if (text.size() == 4) {
+        if (const auto y = readDigits(text, 0, 4)) spec = WholeYear{*y};
+    } else if (text.size() == 7 && text[4] == '.' && text[5] == 'Q') {
         const auto y = readDigits(text, 0, 4), q = readDigits(text, 6, 1);
         if (y && q) spec = Quarter{*y, *q};
+    } else if (text.size() == 7 && text[4] == '.') {
+        const auto y = readDigits(text, 0, 4), m = readDigits(text, 5, 2);
+        if (y && m) spec = YearMonth{*y, *m};
     } else if (text.size() == 10) {
         if (const auto d = readYmd(text, 0)) spec = SingleDate{*d};
     } else if (text.size() == 23 && text.substr(10, 3) == " - ") {
@@ -82,6 +87,16 @@ std::string formatDateSpec(const DateSpec& spec)
             std::snprintf(buf, sizeof buf, "%04d.Q%d", q.year, q.quarter);
             return std::string(buf);
         },
+        [](const WholeYear& y) {
+            char buf[16];
+            std::snprintf(buf, sizeof buf, "%04d", y.year);
+            return std::string(buf);
+        },
+        [](const YearMonth& ym) {
+            char buf[16];
+            std::snprintf(buf, sizeof buf, "%04d.%02d", ym.year, ym.month);
+            return std::string(buf);
+        },
     }, spec);
 }
 
@@ -91,6 +106,8 @@ int filingYear(const DateSpec& spec)
         [](const SingleDate& s) { return static_cast<int>(s.date.year()); },
         [](const Period& p) { return static_cast<int>(p.end.year()); },
         [](const Quarter& q) { return q.year; },
+        [](const WholeYear& y) { return y.year; },
+        [](const YearMonth& ym) { return ym.year; },
     }, spec);
 }
 
@@ -115,6 +132,15 @@ std::optional<std::string> validateDateSpec(const DateSpec& spec)
         [](const Quarter& q) -> std::optional<std::string> {
             if (q.quarter < 1 || q.quarter > 4) return "Quarter must be 1-4.";
             if (!yearInRange(q.year)) return "Year out of range.";
+            return std::nullopt;
+        },
+        [](const WholeYear& y) -> std::optional<std::string> {
+            if (!yearInRange(y.year)) return "Year out of range.";
+            return std::nullopt;
+        },
+        [](const YearMonth& ym) -> std::optional<std::string> {
+            if (ym.month < 1 || ym.month > 12) return "Month must be 1-12.";
+            if (!yearInRange(ym.year)) return "Year out of range.";
             return std::nullopt;
         },
     }, spec);
@@ -169,6 +195,10 @@ DateSpec nextDateSpec(const DateSpec& spec)
         },
         [](const Quarter& q) -> DateSpec {
             return q.quarter >= 4 ? Quarter{q.year + 1, 1} : Quarter{q.year, q.quarter + 1};
+        },
+        [](const WholeYear& y) -> DateSpec { return WholeYear{y.year + 1}; },
+        [](const YearMonth& ym) -> DateSpec {
+            return ym.month >= 12 ? YearMonth{ym.year + 1, 1} : YearMonth{ym.year, ym.month + 1};
         },
     }, spec);
 }

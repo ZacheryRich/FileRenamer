@@ -47,3 +47,63 @@ TEST_CASE("Date validation")
     CHECK(validateDateSpec(Quarter{2026, 5}));
     CHECK_FALSE(validateDateSpec(Quarter{2026, 4}));
 }
+
+TEST_CASE("A whole year is written as just the year")
+{
+    CHECK(formatDateSpec(WholeYear{2026}) == "2026");
+    CHECK(filingYear(WholeYear{2025}) == 2025);
+    CHECK_FALSE(validateDateSpec(WholeYear{2026}));
+    CHECK(validateDateSpec(WholeYear{1800}));
+    CHECK(validateDateSpec(WholeYear{10000}));
+
+    SECTION("it reads back")
+    {
+        const auto parsed = parseDateSpec("2026");
+        REQUIRE(parsed);
+        const auto* year = std::get_if<WholeYear>(&*parsed);
+        REQUIRE(year);
+        CHECK(year->year == 2026);
+        CHECK_FALSE(parseDateSpec("202"));
+        CHECK_FALSE(parseDateSpec("20x6"));
+        CHECK_FALSE(parseDateSpec("1800"));
+    }
+    SECTION("carry-forward moves to the next year")
+    {
+        const DateSpec following = nextDateSpec(WholeYear{2026});
+        const auto* next = std::get_if<WholeYear>(&following);
+        REQUIRE(next);
+        CHECK(next->year == 2027);
+    }
+}
+
+TEST_CASE("A year and month (no day) is written 2026.01")
+{
+    CHECK(formatDateSpec(YearMonth{2026, 1}) == "2026.01");
+    CHECK(formatDateSpec(YearMonth{2026, 12}) == "2026.12");
+    CHECK(filingYear(YearMonth{2025, 6}) == 2025);
+    CHECK_FALSE(validateDateSpec(YearMonth{2026, 12}));
+    CHECK(validateDateSpec(YearMonth{2026, 0}));
+    CHECK(validateDateSpec(YearMonth{2026, 13}));
+
+    SECTION("it reads back, and is not mistaken for a quarter")
+    {
+        const auto parsed = parseDateSpec("2026.03");
+        REQUIRE(parsed);
+        const auto* ym = std::get_if<YearMonth>(&*parsed);
+        REQUIRE(ym);
+        CHECK(ym->year == 2026);
+        CHECK(ym->month == 3);
+        CHECK(std::holds_alternative<Quarter>(*parseDateSpec("2026.Q3")));
+        CHECK_FALSE(parseDateSpec("2026.13"));
+        CHECK_FALSE(parseDateSpec("2026.00"));
+        CHECK_FALSE(parseDateSpec("2026-03"));
+    }
+    SECTION("carry-forward moves to the next month and rolls over the year")
+    {
+        const DateSpec a = nextDateSpec(YearMonth{2026, 1});
+        CHECK(std::get<YearMonth>(a).month == 2);
+        const DateSpec b = nextDateSpec(YearMonth{2026, 12});
+        CHECK(std::get<YearMonth>(b).year == 2027);
+        CHECK(std::get<YearMonth>(b).month == 1);
+    }
+}

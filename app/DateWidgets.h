@@ -16,14 +16,19 @@ class QToolButton;
 // calendar button. Typing moves on by itself once a box is complete ("2026" ->
 // Month, "1/" or "01" -> Day); Backspace in an empty box goes back. Pasting a
 // whole date (1/31/2026, 013126, 2026-01-31) into any box fills all three.
-// Blank is allowed.
+// Blank is allowed. Month and Day are optional: a year alone is the date "2026", a
+// year and month "2026.01" (see spec()); date() is only set when all three are filled.
 class DateField : public QWidget {
     Q_OBJECT
 public:
     explicit DateField(QWidget* parent = nullptr);
     ~DateField() override;
 
-    std::optional<std::chrono::year_month_day> date() const;
+    std::optional<std::chrono::year_month_day> date() const;  // all three boxes filled in
+    // What is filled in: a full date, a year and month, or just a year. Empty if
+    // nothing usable is typed (or there's a day without a month).
+    std::optional<finrenamer::DateSpec> spec() const;
+    void setSpec(const std::optional<finrenamer::DateSpec>& spec);  // other kinds of spec clear the boxes
     bool isBlank() const;         // all three boxes empty
     bool hasInvalidText() const;  // a month/day out of range, or a day the month doesn't have
     QString problem() const;      // why, for the status line ("" when fine)
@@ -48,7 +53,8 @@ private:
     QToolButton* calendarButton_ = nullptr;
 };
 
-// Mode (single date / period / quarter) plus the matching inputs.
+// Mode (single date / period / quarter) plus the matching inputs. The single date
+// may leave Month and Day blank (year only, or year and month).
 class DateSpecEditor : public QWidget {
     Q_OBJECT
 public:

@@ -11,7 +11,7 @@ std::optional<StatementName> splitStatementName(const std::string& stem)
 {
     // The date forms have fixed lengths; the longest first, since a period starts
     // with a complete single date.
-    for (const std::size_t length : {std::size_t{23}, std::size_t{10}, std::size_t{7}}) {
+    for (const std::size_t length : {std::size_t{23}, std::size_t{10}, std::size_t{7}, std::size_t{4}}) {
         if (stem.size() <= length + 1 || stem[length] != ' ') continue;
         if (const auto date = parseDateSpec(std::string_view(stem).substr(0, length)))
             return StatementName{stem.substr(0, length), *date, stem.substr(length + 1)};

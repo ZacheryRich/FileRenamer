@@ -3,6 +3,8 @@
 #include <QDialog>
 
 #include <cstdint>
+#include <set>
+#include <string>
 
 #include "finrenamer/Database.h"
 #include "finrenamer/RenamePlan.h"
@@ -43,3 +45,12 @@ private:
     QLabel* summary_ = nullptr;
     QPushButton* applyBtn_ = nullptr;
 };
+
+// Every file label and folder name the case's accounts produce right now. Compare
+// before and after an account or person edit to see whether names changed.
+std::set<std::string> accountNameSet(finrenamer::Database& db, std::int64_t caseId, QWidget* parent);
+
+// If the names differ from `before`, asks "Update them now?" and opens Update File
+// Names on Yes. Shared by the Case List and the File Renamer.
+void offerNameUpdate(QWidget* parent, finrenamer::Database& db, std::int64_t caseId,
+                     const std::set<std::string>& before);

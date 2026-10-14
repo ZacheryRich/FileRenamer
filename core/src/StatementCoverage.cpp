@@ -55,6 +55,10 @@ std::vector<Month> monthsCovered(const DateSpec& date)
         for (int m = 1; m <= 3; ++m)
             out.push_back(Month{chr::year{quarter->year},
                                 chr::month{static_cast<unsigned>((quarter->quarter - 1) * 3 + m)}});
+    } else if (const auto* ym = std::get_if<YearMonth>(&date)) {
+        out.push_back(Month{chr::year{ym->year}, chr::month{static_cast<unsigned>(ym->month)}});
+    } else if (const auto* year = std::get_if<WholeYear>(&date)) {
+        for (unsigned m = 1; m <= 12; ++m) out.push_back(Month{chr::year{year->year}, chr::month{m}});
     }
     return out;
 }

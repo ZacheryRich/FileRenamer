@@ -26,6 +26,7 @@
 #include "AccountDialog.h"
 #include "DateWidgets.h"
 #include "PdfPreview.h"
+#include "UpdateNamesDialog.h"
 #include "QtHelpers.h"
 #include "finrenamer/FilenameBuilder.h"
 
@@ -212,10 +213,14 @@ void RenameWindow::buildUi()
     account_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     account_->setMinimumContentsLength(28);
     newAccountBtn_ = new QPushButton(tr("New Account..."));
+    editAccountBtn_ = new QPushButton(tr("Edit Account..."));
+    editAccountBtn_->setObjectName("editAccount");
+    editAccountBtn_->setToolTip(tr("Change the chosen account (institution, numbers, owners...)"));
     accountBox_ = new QWidget;
     auto* accountRow = new QHBoxLayout(accountBox_);
     accountRow->setContentsMargins(0, 0, 0, 0);
     accountRow->addWidget(account_, 1);
+    accountRow->addWidget(editAccountBtn_);
     accountRow->addWidget(newAccountBtn_);
 
     textStyle_ = new QComboBox;
@@ -375,6 +380,8 @@ void RenameWindow::buildUi()
     connect(date_, &DateSpecEditor::changed, this, &RenameWindow::commitEditor);
     connect(skip_, &QCheckBox::toggled, this, &RenameWindow::commitEditor);
     connect(newAccountBtn_, &QPushButton::clicked, this, &RenameWindow::newAccount);
+    connect(editAccountBtn_, &QPushButton::clicked, this, &RenameWindow::editAccount);
+    connect(account_, &QComboBox::currentIndexChanged, this, &RenameWindow::updateAccountButtons);
     connect(openBtn_, &QPushButton::clicked, this, &RenameWindow::openPdf);
     connect(nextBtn_, &QPushButton::clicked, this, &RenameWindow::goToNext);
 
@@ -646,6 +653,7 @@ void RenameWindow::loadEditor()
         for (QWidget* w : std::initializer_list<QWidget*>{skip_, openBtn_, nextBtn_}) w->setEnabled(false);
         fillNumbers(std::nullopt, {});
         loadingEditor_ = false;
+        updateAccountButtons();
         return;
     }
 
@@ -674,6 +682,7 @@ void RenameWindow::loadEditor()
     nextBtn_->setEnabled(true);
 
     loadingEditor_ = false;
+    updateAccountButtons();
     updatePreview();
 }
 
@@ -806,6 +815,46 @@ void RenameWindow::newAccount()
     reloadAccounts();
     const int index = accountIndex(dialog.savedAccountId());
     if (index >= 0) account_->setCurrentIndex(index);  // commits to the current row
+}
+
+void RenameWindow::updateAccountButtons()
+{
+    // Editing an account only needs one to be chosen (even on a file that is already renamed).
+    editAccountBtn_->setEnabled(currentRow().has_value() && account_->currentData(kAccountIdRole).isValid());
+}
+
+void RenameWindow::editAccount()
+{
+    const QVariant idData = account_->currentData(kAccountIdRole);
+    if (!idData.isValid()) return;
+    const std::int64_t accountId = idData.toLongLong();
+
+    std::optional<AccountRecord> record;
+    if (!runGuarded(this, [&] { record = db_.getAccount(accountId); }) || !record) return;
+
+    const auto before = accountNameSet(db_, caseId_, this);
+    AccountDialog dialog(db_, caseId_, record, this);
+    const bool saved = dialog.exec() == QDialog::Accepted;
+    if (!saved) return;
+
+    reloadAccounts();  // keeps the chosen account and number selected where they still exist
+    // A file whose chosen number was removed or corrected goes back to the account's current number.
+    if (session_) {
+        if (const Account* edited = session_->findAccount(accountId)) {
+            for (std::size_t i = 0; i < session_->size(); ++i) {
+                SessionRow& row = session_->row(i);
+                if (row.done || row.accountId != accountId || row.number.empty()) continue;
+                const bool known = row.number == edited->lastFour ||
+                    std::find(edited->previousLastFour.begin(), edited->previousLastFour.end(), row.number) !=
+                        edited->previousLastFour.end();
+                if (!known) row.number.clear();
+            }
+        }
+    }
+    loadEditor();
+    updatePreview();
+    updateAccountButtons();
+    offerNameUpdate(this, db_, caseId_, before);
 }
 
 void RenameWindow::openPdf()

@@ -16,6 +16,7 @@
 
 #include "CaseFolderList.h"
 #include "QtHelpers.h"
+#include "finrenamer/FilenameBuilder.h"
 #include "finrenamer/NameFixer.h"
 #include "finrenamer/RenameEngine.h"
 #include "finrenamer/Utf8Path.h"
@@ -258,4 +259,33 @@ void UpdateNamesDialog::apply()
     // A chosen folder that was itself renamed: follow it in the list.
     for (const ExecutedMove& m : result.record.moves) folderList_->replaceFolder(m.from, m.to);
     scan();  // shows what (if anything) is left
+}
+
+std::set<std::string> accountNameSet(Database& db, std::int64_t caseId, QWidget* parent)
+{
+    std::set<std::string> names;
+    runGuarded(parent, [&] {
+        for (const Account& a : db.loadAccounts(caseId)) {
+            names.insert("file:" + accountLabel(a));
+            for (const auto& n : a.previousLastFour) names.insert("file:" + accountLabel(a, n));
+            names.insert("folder:" + accountFolderLabel(a));
+        }
+    });
+    return names;
+}
+
+void offerNameUpdate(QWidget* parent, Database& db, std::int64_t caseId, const std::set<std::string>& before)
+{
+    if (accountNameSet(db, caseId, parent) == before) return;  // nothing that appears in names changed
+    const auto answer = QMessageBox::question(
+        parent, QObject::tr("Update File Names"),
+        QObject::tr("This changes how the account's files and folders are named. Files and folders "
+                    "you've already renamed still use the old version.\n\n"
+                    "Update them now? You'll see every change before anything is renamed."),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (answer != QMessageBox::Yes) return;
+    UpdateNamesDialog dialog(db, caseId, parent);
+    // Folders used for this case before are remembered; ask for one the first time.
+    if (!dialog.hasFolders() && !dialog.promptForFolder()) return;
+    dialog.exec();
 }

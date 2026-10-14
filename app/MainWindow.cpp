@@ -627,29 +627,14 @@ void MainWindow::renameFiles()
 // Every file label and folder name this case's accounts produce right now.
 std::set<std::string> MainWindow::currentNames()
 {
-    std::set<std::string> names;
     const auto caseId = currentCaseId();
-    if (!caseId) return names;
-    runGuarded(this, [&] {
-        for (const Account& a : db_.loadAccounts(*caseId)) {
-            names.insert("file:" + accountLabel(a));
-            for (const auto& n : a.previousLastFour) names.insert("file:" + accountLabel(a, n));
-            names.insert("folder:" + accountFolderLabel(a));
-        }
-    });
-    return names;
+    if (!caseId) return {};
+    return accountNameSet(db_, *caseId, this);
 }
 
 void MainWindow::offerNameUpdate(const std::set<std::string>& namesBefore)
 {
-    if (currentNames() == namesBefore) return;  // nothing that appears in names changed
-    const auto answer = QMessageBox::question(
-        this, tr("Update File Names"),
-        tr("This changes how the account's files and folders are named. Files and folders "
-           "you've already renamed still use the old version.\n\n"
-           "Update them now? You'll see every change before anything is renamed."),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
-    if (answer == QMessageBox::Yes) updateFileNames();
+    if (const auto caseId = currentCaseId()) ::offerNameUpdate(this, db_, *caseId, namesBefore);
 }
 
 void MainWindow::deficiencyList()

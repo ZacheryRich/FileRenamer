@@ -189,3 +189,23 @@ TEST_CASE("Carry-forward after a document copies kind, label and people with the
     CHECK(result.record.moves.size() == 2);
     CHECK(session.row(2).isBlank());
 }
+
+TEST_CASE("Every kind of file can be dated with just a year")
+{
+    const DateSpec year = WholeYear{2025};
+    CHECK_FALSE(validateDocumentDate(email("a", "b"), year));
+    DocumentInfo text;
+    text.kind = DocKind::Text;
+    text.label = "Texts";
+    CHECK_FALSE(validateDocumentDate(text, year));
+    DocumentInfo other;
+    other.kind = DocKind::Other;
+    other.label = "Tax Return";
+    CHECK_FALSE(validateDocumentDate(other, year));
+    CHECK(buildDocumentFilename(other, year) == "2025 Tax Return.pdf");
+    CHECK(buildDocumentFilename(email("John", "Jane"), year) == "2025 Email from John to Jane.pdf");
+
+    const DateSpec month = YearMonth{2025, 3};
+    CHECK_FALSE(validateDocumentDate(email("a", "b"), month));
+    CHECK(buildDocumentFilename(other, month) == "2025.03 Tax Return.pdf");
+}

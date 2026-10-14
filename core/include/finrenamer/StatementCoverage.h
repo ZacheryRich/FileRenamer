@@ -27,6 +27,8 @@ std::string monthYearText(Month m);
 //   a single date -> its calendar month
 //   a period      -> every month it touches (Jan 1 - Mar 31 -> Jan, Feb, Mar)
 //   a quarter     -> its three months
+//   a year and month (no day) -> that month
+//   a whole year  -> all twelve months
 std::vector<Month> monthsCovered(const DateSpec& date);
 
 // What a search of the case's folders found.

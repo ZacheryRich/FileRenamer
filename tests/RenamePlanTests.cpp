@@ -209,3 +209,26 @@ TEST_CASE("Names that differ only in letter case are treated as the same")
     CHECK(utf8FromPath(plan.moves[1].destination.filename()) ==
           "2026.Q1 Fidelity Brokerage x5678 (josé núñez) (2).pdf");
 }
+
+TEST_CASE("A statement for a whole year is named with just the year, and files under that year")
+{
+    testing::TempDir dir;
+    const fs::path src = dir.touch("annual.pdf");
+
+    PlanOptions opts;
+    opts.sort.byYear = true;
+    const auto plan = buildPlan(dir.path(), {input(src, testing::fidelitySingle(), WholeYear{2025})}, opts);
+    REQUIRE(plan.moves.size() == 1);
+    CHECK(plan.moves[0].status == MoveStatus::Ready);
+    CHECK(plan.moves[0].destination == dir.path() / "2025" / "2025 Fidelity Brokerage x5678 (Jane Smith).pdf");
+}
+
+TEST_CASE("A statement dated with a year and month has no day in its name")
+{
+    testing::TempDir dir;
+    const fs::path src = dir.touch("march.pdf");
+    const auto plan = buildPlan(dir.path(), {input(src, testing::fidelitySingle(), YearMonth{2025, 3})}, {});
+    REQUIRE(plan.moves.size() == 1);
+    CHECK(plan.moves[0].status == MoveStatus::Ready);
+    CHECK(plan.moves[0].destination == dir.path() / "2025.03 Fidelity Brokerage x5678 (Jane Smith).pdf");
+}
