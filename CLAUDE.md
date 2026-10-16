@@ -397,7 +397,11 @@ is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a
     `find_path`/`find_library`, so those cache variables are pre-answered with our targets
     (`zlibstatic`, `jpeg-static`) and headers staged in `build/qpdf-deps/include`.
     libjpeg-turbo refuses `add_subdirectory`, so `cmake/patch_libjpeg_turbo.cmake` switches off
-    that one check (FetchContent PATCH_COMMAND). qpdf registers perl-based self-tests with
+    that one check (FetchContent PATCH_COMMAND). The same patch also drops its
+    `BuildPackages.cmake` include: that defines global targets `installer`, `dist`, `rpm`... and on
+    Windows `installer` clashed with ours (CMP0002 configure error, hit on the first MSVC configure).
+    `-DPATCH_REVISION=<n>` in the PATCH_COMMAND is bumped whenever the patch changes so FetchContent
+    re-applies it; if an old `build/_deps/jpeg_for_qpdf-*` ever misbehaves, delete those folders. qpdf registers perl-based self-tests with
     `add_test`; a wrapper `add_test` function drops them so `ctest`/Test Explorer stay clean.
     `FINRENAMER_QPDF_TARGET` (cache INTERNAL) is what tests link. Verified on Linux/GCC only;
     **the first MSVC build of qpdf/libjpeg-turbo/zlib is the user's** (first configure downloads

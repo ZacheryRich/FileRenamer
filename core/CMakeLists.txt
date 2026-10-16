@@ -61,7 +61,7 @@ else()
         GIT_REPOSITORY https://github.com/libjpeg-turbo/libjpeg-turbo.git
         GIT_TAG 3.0.4
         GIT_SHALLOW TRUE
-        PATCH_COMMAND ${CMAKE_COMMAND} -DFILE=<SOURCE_DIR>/CMakeLists.txt
+        PATCH_COMMAND ${CMAKE_COMMAND} -DPATCH_REVISION=2 -DFILE=<SOURCE_DIR>/CMakeLists.txt
                       -P ${PROJECT_SOURCE_DIR}/cmake/patch_libjpeg_turbo.cmake
         EXCLUDE_FROM_ALL)
     # libjpeg-turbo's install rules need these to be set (the usual defaults).
