@@ -19,6 +19,7 @@
 #include <QSpinBox>
 #include <QSplitter>
 #include <QTextBrowser>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -27,6 +28,7 @@
 #include <stdexcept>
 
 #include "CaseFolderList.h"
+#include "PossibleMatchesDialog.h"
 #include "QtHelpers.h"
 #include "finrenamer/FilenameBuilder.h"
 #include "finrenamer/Utf8Path.h"
@@ -77,6 +79,7 @@ QString reportHtml(const DeficiencyReport& r)
         }
         out += QStringLiteral("</table>");
     }
+    if (!r.footnote.empty()) out += QStringLiteral("<p><i>%1</i></p>").arg(html(r.footnote));
     return out;
 }
 
@@ -196,12 +199,16 @@ DeficiencyDialog::DeficiencyDialog(Database& db, std::int64_t caseId, QWidget* p
     looseBtn_ = new QPushButton(tr("Other Name Styles..."));
     looseBtn_->setObjectName("loose");
     looseBtn_->setToolTip(tr("Files counted although their names aren't in this program's format"));
+    possibleBtn_ = new QPushButton(tr("Possible Matches..."));
+    possibleBtn_->setObjectName("possible");
+    possibleBtn_->setToolTip(tr("Files with extra words in their names: choose which ones are statements"));
     auto* rescanBtn = new QPushButton(tr("Scan Again"));
     saveBtn_ = new QPushButton(tr("Save as Word..."));
     saveBtn_->setObjectName("save");
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
     buttons->addButton(unmatchedBtn_, QDialogButtonBox::ActionRole);
     buttons->addButton(looseBtn_, QDialogButtonBox::ActionRole);
+    buttons->addButton(possibleBtn_, QDialogButtonBox::ActionRole);
     buttons->addButton(rescanBtn, QDialogButtonBox::ActionRole);
     buttons->addButton(saveBtn_, QDialogButtonBox::AcceptRole);
 
@@ -271,6 +278,7 @@ DeficiencyDialog::DeficiencyDialog(Database& db, std::int64_t caseId, QWidget* p
     connect(rescanBtn, &QPushButton::clicked, this, &DeficiencyDialog::rescan);
     connect(unmatchedBtn_, &QPushButton::clicked, this, &DeficiencyDialog::showUnmatched);
     connect(looseBtn_, &QPushButton::clicked, this, &DeficiencyDialog::showLoose);
+    connect(possibleBtn_, &QPushButton::clicked, this, [this] { reviewPossible(false); });
     connect(saveBtn_, &QPushButton::clicked, this, &DeficiencyDialog::saveAs);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
@@ -382,20 +390,39 @@ void DeficiencyDialog::saveSettings() const
 void DeficiencyDialog::rescan()
 {
     scan_ = {};
+    allAccounts_.clear();
     if (folderList_->hasFolders()) {
         const std::vector<fs::path> roots = folderList_->paths();
         const bool sub = subfolders_->isChecked();
         QApplication::setOverrideCursor(Qt::WaitCursor);
         runGuarded(this, [&] {
-            scan_ = scanStatements(roots, sub, db_.loadAccounts(caseId_), db_.oldAccountNames(caseId_));
+            allAccounts_ = db_.loadAccounts(caseId_);
+            scan_ = scanStatements(roots, sub, allAccounts_, db_.oldAccountNames(caseId_));
         });
         QApplication::restoreOverrideCursor();
     }
 
+    // Possible matches: files already decided about keep the answer; new ones start ticked
+    // and are put to the user.
+    const auto remembered = rememberedDecisions();
+    included_.assign(scan_.possible.size(), true);
+    bool anyNew = false;
+    for (std::size_t i = 0; i < scan_.possible.size(); ++i) {
+        const auto it = remembered.find(caseFoldKey(scan_.possible[i].file));
+        if (it != remembered.end()) included_[i] = it->second;
+        else anyNew = true;
+    }
+    if (anyNew && askPossible_) {
+        // Shown by the event loop, never inside the call that triggered the scan; until the
+        // user answers, the new files count (they start ticked).
+        QTimer::singleShot(0, this, [this] { reviewPossible(true); });
+    }
+    rebuildEffective();
+
     // Until the user picks a start, begin at the earliest statement found.
     if (!rangeChosen_) {
         std::optional<Month> earliest;
-        for (const auto& [id, months] : scan_.covered)
+        for (const auto& [id, months] : effective_.covered)
             if (!months.empty() && (!earliest || *months.begin() < *earliest)) earliest = *months.begin();
         setFromMonth(earliest ? *earliest : currentLastCompletedMonth());
     }
@@ -437,7 +464,7 @@ void DeficiencyDialog::refresh()
         problem = tr("Add the folders to search.");
 
     if (problem.isEmpty()) {
-        report_ = buildDeficiencyReport(stdstr(caseName_), analyzeCoverage(chosen, scan_, from, to), settings);
+        report_ = buildDeficiencyReport(stdstr(caseName_), analyzeCoverage(chosen, effective_, from, to), settings);
         preview_->setHtml(reportHtml(report_));
     } else {
         preview_->setHtml(QStringLiteral("<p><i>%1</i></p>").arg(problem.toHtmlEscaped()));
@@ -447,17 +474,21 @@ void DeficiencyDialog::refresh()
     if (!folderList_->hasFolders()) {
         summary_->setText(tr("Add the folders to search."));
     } else {
-        const std::size_t unmatched = scan_.unmatched.size();
+        const std::size_t countedPossible = static_cast<std::size_t>(std::count(included_.begin(), included_.end(), true));
+        const std::size_t unmatched = scan_.unmatched.size() + (scan_.possible.size() - countedPossible);
         QString text = tr("%1 PDF(s) found: %2 matched to accounts, %3 not matched.")
                            .arg(scan_.pdfCount)
-                           .arg(scan_.matchedCount)
+                           .arg(effective_.matchedCount)
                            .arg(unmatched);
-        if (!scan_.loose.empty())
-            text += tr("  %1 matched were named in another style (see Other Name Styles).").arg(scan_.loose.size());
+        if (!effective_.loose.empty())
+            text += tr("  %1 matched were named in another style (see Other Name Styles).").arg(effective_.loose.size());
+        if (!scan_.possible.empty())
+            text += tr("  %1 of %2 possible match(es) counted.").arg(countedPossible).arg(scan_.possible.size());
         summary_->setText(text);
     }
     unmatchedBtn_->setEnabled(!scan_.unmatched.empty());
-    looseBtn_->setEnabled(!scan_.loose.empty());
+    looseBtn_->setEnabled(!effective_.loose.empty());
+    possibleBtn_->setEnabled(!scan_.possible.empty());
 }
 
 QString DeficiencyDialog::previewText() const
@@ -493,8 +524,95 @@ void DeficiencyDialog::showLoose()
                  tr("These %1 PDF(s) aren't named the way this program names files, but each shows a "
                     "date and an account's last four digits with its institution or type, so they were "
                     "counted. Check the list; File Renamer can rename them properly.")
-                     .arg(scan_.loose.size()),
-                 scan_.loose);
+                     .arg(effective_.loose.size()),
+                 effective_.loose);
+}
+
+// ---------------------------------------------------------------------------
+// Possible matches
+
+void DeficiencyDialog::rebuildEffective()
+{
+    effective_ = applyPossibleMatches(scan_, allAccounts_, included_);
+}
+
+std::map<std::string, bool> DeficiencyDialog::rememberedDecisions() const
+{
+    std::map<std::string, bool> out;
+    QSettings s(settingsFile(), QSettings::IniFormat);
+    const int n = s.beginReadArray(settingsPrefix(caseId_) + "possible");
+    for (int i = 0; i < n; ++i) {
+        s.setArrayIndex(i);
+        out[caseFoldKey(toPath(s.value("file").toString()))] = s.value("included").toBool();
+    }
+    s.endArray();
+    return out;
+}
+
+void DeficiencyDialog::rememberDecisions() const
+{
+    QSettings s(settingsFile(), QSettings::IniFormat);
+    const QString key = settingsPrefix(caseId_) + "possible";
+    s.remove(key);
+    s.beginWriteArray(key, static_cast<int>(scan_.possible.size()));
+    for (std::size_t i = 0; i < scan_.possible.size(); ++i) {
+        s.setArrayIndex(static_cast<int>(i));
+        s.setValue("file", qpath(scan_.possible[i].file));
+        s.setValue("included", i < included_.size() && included_[i]);
+    }
+    s.endArray();
+}
+
+void DeficiencyDialog::setPossibleIncluded(const std::vector<bool>& included)
+{
+    included_ = included;
+    included_.resize(scan_.possible.size(), false);
+    rememberDecisions();
+    rebuildEffective();
+    refresh();
+}
+
+void DeficiencyDialog::reviewPossible(bool onlyUndecided)
+{
+    if (scan_.possible.empty()) return;
+    const auto remembered = rememberedDecisions();
+    auto labelOf = [&](std::int64_t id) {
+        for (const Account& a : allAccounts_)
+            if (a.id == id) return qstr(accountLabel(a));
+        return QString();
+    };
+    std::vector<PossibleMatchesDialog::Row> rows;
+    std::vector<std::size_t> index;  // row -> position in scan_.possible
+    for (std::size_t i = 0; i < scan_.possible.size(); ++i) {
+        const PossibleMatch& p = scan_.possible[i];
+        if (onlyUndecided && remembered.count(caseFoldKey(p.file))) continue;
+        QStringList words;
+        for (const std::string& w : p.extraWords) words << qstr(w);
+        const auto months = monthsCovered(p.date);
+        QString when = months.empty() ? QString() : qstr(monthYearText(months.front()));
+        if (months.size() > 1) when += QStringLiteral(" - ") + qstr(monthYearText(months.back()));
+        rows.push_back({qstr(utf8FromPath(p.file.filename())), QDir::toNativeSeparators(qpath(p.file.parent_path())),
+                        labelOf(p.accountId) + QStringLiteral(", ") + when, words.join(' '),
+                        i < included_.size() && included_[i]});
+        index.push_back(i);
+    }
+    if (rows.empty()) return;
+
+    PossibleMatchesDialog dialog(std::move(rows), this);
+    if (dialog.exec() != QDialog::Accepted) {
+        // Cancel: the files in question are not counted, and nothing is remembered.
+        if (onlyUndecided) {
+            for (const std::size_t i : index) included_[i] = false;
+            rebuildEffective();
+            refresh();
+        }
+        return;
+    }
+    const std::vector<bool> picked = dialog.included();
+    for (std::size_t k = 0; k < index.size(); ++k) included_[index[k]] = picked[k];
+    rememberDecisions();
+    rebuildEffective();
+    refresh();
 }
 
 // ---------------------------------------------------------------------------

@@ -91,7 +91,7 @@ TEST_CASE("Combined statements list each account's type and number")
     Account c;
     c.institution = "JPMorgan Chase";
     c.institutionDisplay = "Chase";
-    c.combined = {{1, "Chk", "1111"}, {2, "Sav", "2222"}, {3, "Chk", "3333"}};
+    c.combined = {{"Chk", "1111"}, {"Sav", "2222"}, {"Chk", "3333"}};
     c.owners = {"H"};
     CHECK(accountLabel(c) == "Chase Chk x1111, Sav x2222, Chk x3333 (H)");
     CHECK(accountFolderLabel(c) == accountLabel(c));  // the folder is named the same way
@@ -100,15 +100,15 @@ TEST_CASE("Combined statements list each account's type and number")
     CHECK(accountLabel(c, "9999") == accountLabel(c));  // per-file numbers don't apply
 
     c.owners = {"H", "W"};
-    c.combined = {{1, "Checking", "1111"}, {2, "Savings", "2222"}};
+    c.combined = {{"Checking", "1111"}, {"Savings", "2222"}};
     CHECK(accountLabel(c) == "Chase Checking x1111, Savings x2222 (H; W)");
     CHECK_FALSE(validateAccount(c));
 
     c.combined.pop_back();
     CHECK(validateAccount(c));  // needs two accounts
-    c.combined = {{1, "Checking", "1111"}, {2, "", "2222"}};
+    c.combined = {{"Checking", "1111"}, {"", "2222"}};
     CHECK_FALSE(validateAccount(c));  // a blank type is fine now
-    c.combined = {{1, "Checking", "1111"}, {2, "Savings", ""}};
+    c.combined = {{"Checking", "1111"}, {"Savings", ""}};
     CHECK(validateAccount(c));        // a blank number is not
 }
 
@@ -131,7 +131,7 @@ TEST_CASE("The account type may be left blank")
     // On a combined statement a blank type leaves just the number: "Chase x1111, Sav x2222".
     Account combined;
     combined.institution = "Chase";
-    combined.combined = {{1, "", "1111"}, {2, "Sav", "2222"}};
+    combined.combined = {{"", "1111"}, {"Sav", "2222"}};
     CHECK_FALSE(validateAccount(combined));
     CHECK(accountLabel(combined) == "Chase x1111, Sav x2222");
 }

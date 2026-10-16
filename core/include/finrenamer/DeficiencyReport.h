@@ -28,6 +28,9 @@ struct DeficiencyReport {
     bool showFound = true;  // which columns the tables have (at least one)
     bool showMissing = true;
     std::vector<ReportTable> tables;
+    // Set when some found month has a star: those months rest only on files whose names
+    // aren't in this program's format.
+    std::string footnote;
 };
 
 // "Jan–Mar, May": months 1..12 in order, runs of three or more joined with an

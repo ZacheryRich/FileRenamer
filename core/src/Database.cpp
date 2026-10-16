@@ -15,7 +15,7 @@ namespace finrenamer {
 
 namespace {
 
-constexpr int kSchemaVersion = 6;
+constexpr int kSchemaVersion = 9;
 
 // Each entry upgrades the schema by one version. Never edit a shipped entry;
 // add a new one instead, so existing databases upgrade in place.
@@ -131,6 +131,49 @@ const char* const kMigrations[] = {
     ALTER TABLE accounts ADD COLUMN opened_on TEXT NOT NULL DEFAULT '';
     ALTER TABLE accounts ADD COLUMN closed_on TEXT NOT NULL DEFAULT '';
     )sql",
+
+    // Version 7: a combined statement has its own institution and a typed list of
+    // (type, number) parts instead of links to other accounts. Existing statements
+    // keep what their linked accounts showed.
+    R"sql(
+    CREATE TABLE combined_parts (
+        combined_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        position     INTEGER NOT NULL,
+        account_type TEXT NOT NULL,
+        last_four    TEXT NOT NULL,
+        PRIMARY KEY (combined_id, position)
+    );
+
+    INSERT INTO combined_parts (combined_id, position, account_type, last_four)
+        SELECT cm.combined_id, cm.position, m.account_type, m.last_four
+        FROM combined_members cm JOIN accounts m ON m.id = cm.account_id;
+
+    UPDATE accounts SET
+        institution = COALESCE((SELECT m.institution FROM combined_members cm
+            JOIN accounts m ON m.id = cm.account_id
+            WHERE cm.combined_id = accounts.id ORDER BY cm.position LIMIT 1), institution),
+        institution_display = COALESCE((SELECT m.institution_display FROM combined_members cm
+            JOIN accounts m ON m.id = cm.account_id
+            WHERE cm.combined_id = accounts.id ORDER BY cm.position LIMIT 1), institution_display)
+        WHERE is_combined = 1;
+
+    DROP TABLE combined_members;
+    )sql",
+
+    // Version 8: user-defined file name templates for the rename screen (emails, texts...).
+    R"sql(
+    CREATE TABLE document_templates (
+        id           INTEGER PRIMARY KEY,
+        name         TEXT NOT NULL,
+        pattern      TEXT NOT NULL,
+        allow_period INTEGER NOT NULL DEFAULT 0
+    );
+    )sql",
+
+    // Version 9: a template can leave the date out of the name.
+    R"sql(
+    ALTER TABLE document_templates ADD COLUMN use_date INTEGER NOT NULL DEFAULT 1;
+    )sql",
 };
 
 static_assert(std::size(kMigrations) == kSchemaVersion,
@@ -188,7 +231,39 @@ struct Database::Impl {
     {
         db.exec("PRAGMA foreign_keys = ON");
         db.setBusyTimeout(3000);  // wait briefly if another copy of the app is writing
+        const int current = userVersion();
+        // An existing database that is about to be upgraded is copied first, so a bad
+        // upgrade can't cost the only copy. (Fresh and in-memory databases have nothing to lose.)
+        if (current > 0 && current < kSchemaVersion && utf8File != ":memory:") {
+            const fs::path file = pathFromUtf8(utf8File);
+            fs::path copy = file;
+            copy += ".backup-v" + std::to_string(current);
+            for (int n = 2; fs::exists(copy); ++n) {
+                copy = file;
+                copy += ".backup-v" + std::to_string(current) + "-" + std::to_string(n);
+            }
+            try {
+                copyTo(copy);
+            } catch (const std::exception& e) {
+                throw DatabaseError("The database needs upgrading, but a backup copy could not be made first, "
+                                    "so nothing was changed. " + std::string(e.what()));
+            }
+        }
         migrate();
+    }
+
+    // A consistent snapshot of the whole database in `dest` (replacing it if it exists).
+    void copyTo(const fs::path& dest)
+    {
+        fs::path temp = dest;
+        temp += ".writing";
+        std::error_code ignore;
+        fs::remove(temp, ignore);
+        std::string quoted = utf8FromPath(temp);
+        for (std::size_t at = quoted.find('\''); at != std::string::npos; at = quoted.find('\'', at + 2))
+            quoted.insert(at, "'");
+        db.exec("VACUUM INTO '" + quoted + "'");
+        fs::rename(temp, dest);  // replaces an existing file
     }
 
     SQLite::Database db;
@@ -287,20 +362,16 @@ struct Database::Impl {
 
     void validateCombined(const AccountRecord& a)
     {
-        if (a.memberIds.size() < 2) throw DatabaseError("A combined statement needs at least two accounts.");
-        std::set<std::int64_t> seen;
-        std::string institution;
-        for (const auto id : a.memberIds) {
-            if (!seen.insert(id).second) throw DatabaseError("The same account is listed twice.");
-            const auto m = getRecord(id);
-            if (!m || id == a.id) throw DatabaseError("An account on the statement no longer exists.");
-            if (m->caseId != a.caseId) throw DatabaseError("An account on the statement belongs to a different case.");
-            if (m->isCombined())
-                throw DatabaseError("A combined statement can't include another combined statement.");
-            if (institution.empty()) institution = m->institution;
-            else if (foldKey(trimmed(m->institution)) != foldKey(trimmed(institution)))
-                throw DatabaseError("All accounts on a combined statement must be at the same institution (" +
-                                    institution + " and " + m->institution + ").");
+        if (a.parts.size() < 2) throw DatabaseError("A combined statement needs at least two accounts.");
+        if (trimmed(a.institution).empty()) throw DatabaseError("A combined statement needs an institution.");
+        std::set<std::string> seen;
+        for (const CombinedPart& p : a.parts) {
+            const std::string number = trimmed(p.lastFour);
+            if (number.empty()) throw DatabaseError("An account on the combined statement has no number.");
+            const std::string key = caseFoldKey(pathFromUtf8(trimmed(p.accountType) + "|" + number));
+            if (!seen.insert(key).second)
+                throw DatabaseError("The same account (" + trimmed(p.accountType) + " " + number +
+                                    ") is listed twice.");
         }
         validateOwners(a);
     }
@@ -330,59 +401,41 @@ struct Database::Impl {
         validateOwners(a);
     }
 
-    void writeMembers(std::int64_t combinedId, const std::vector<std::int64_t>& memberIds)
+    void writeParts(std::int64_t combinedId, const std::vector<CombinedPart>& parts)
     {
-        SQLite::Statement del(db, "DELETE FROM combined_members WHERE combined_id = ?");
+        SQLite::Statement del(db, "DELETE FROM combined_parts WHERE combined_id = ?");
         del.bind(1, combinedId);
         del.exec();
 
         SQLite::Statement ins(db,
-            "INSERT INTO combined_members (combined_id, account_id, position) VALUES (?, ?, ?)");
+            "INSERT INTO combined_parts (combined_id, position, account_type, last_four) VALUES (?, ?, ?, ?)");
         int position = 0;
-        for (const auto id : memberIds) {
+        for (const CombinedPart& p : parts) {
             ins.bind(1, combinedId);
-            ins.bind(2, id);
-            ins.bind(3, position++);
+            ins.bind(2, position++);
+            ins.bind(3, trimmed(p.accountType));
+            ins.bind(4, trimmed(p.lastFour));
             ins.exec();
             ins.reset();
         }
     }
 
-    std::vector<std::int64_t> membersOf(std::int64_t combinedId)
+    std::vector<CombinedPart> partsOf(std::int64_t combinedId)
     {
         SQLite::Statement q(db,
-            "SELECT account_id FROM combined_members WHERE combined_id = ? ORDER BY position");
+            "SELECT account_type, last_four FROM combined_parts WHERE combined_id = ? ORDER BY position");
         q.bind(1, combinedId);
-        std::vector<std::int64_t> ids;
-        while (q.executeStep()) ids.push_back(q.getColumn(0).getInt64());
-        return ids;
+        std::vector<CombinedPart> out;
+        while (q.executeStep()) out.push_back({q.getColumn(0).getString(), q.getColumn(1).getString()});
+        return out;
     }
 
-    // Combined statements that include this account.
-    std::vector<std::int64_t> combinedContaining(std::int64_t accountId)
-    {
-        SQLite::Statement q(db, "SELECT combined_id FROM combined_members WHERE account_id = ?");
-        q.bind(1, accountId);
-        std::vector<std::int64_t> ids;
-        while (q.executeStep()) ids.push_back(q.getColumn(0).getInt64());
-        return ids;
-    }
-
-    // Owners, previous numbers and members, plus (for a combined statement)
-    // the institution of its first account.
+    // Owners, previous numbers and (for a combined statement) its parts.
     void completeRecord(AccountRecord& a, bool combined)
     {
         a.ownerIds = ownersOf(a.id);
         a.previousLastFour = previousOf(a.id);
-        if (!combined) return;
-        a.memberIds = membersOf(a.id);
-        if (a.memberIds.empty()) return;
-        SQLite::Statement q(db, "SELECT institution, institution_display FROM accounts WHERE id = ?");
-        q.bind(1, a.memberIds.front());
-        if (q.executeStep()) {
-            a.institution = q.getColumn(0).getString();
-            a.institutionDisplay = q.getColumn(1).getString();
-        }
+        if (combined) a.parts = partsOf(a.id);
     }
 
     std::optional<AccountRecord> getRecord(std::int64_t accountId)
@@ -464,8 +517,7 @@ struct Database::Impl {
         a.previousLastFour = r.previousLastFour;
         a.openedOn = r.openedOn;
         a.closedOn = r.closedOn;
-        for (const auto memberId : r.memberIds)
-            if (const auto m = getRecord(memberId)) a.combined.push_back({m->id, m->accountType, m->lastFour});
+        a.combined = r.parts;
 
         SQLite::Statement names(db, R"sql(
             SELECT p.display_name FROM account_owners o JOIN people p ON p.id = o.person_id
@@ -488,29 +540,6 @@ struct Database::Impl {
         for (const auto id : ids)
             if (auto a = loadAccount(id)) out.push_back(std::move(*a));
         return out;
-    }
-
-    // An edit to `memberId` changed combined statement `before` into `after`.
-    // A member that only got a newer number (its old one is still one of its
-    // numbers) leaves older statements correctly named, as with a single
-    // account; only the folder moves to the new name then.
-    void recordMemberChange(const Account& before, const Account& after, std::int64_t memberId,
-                            const std::string& oldNumber, const Database::NumberCorrections& corrections)
-    {
-        std::string target = oldNumber;
-        for (const auto& [from, to] : corrections)
-            if (foldKey(from) == foldKey(oldNumber)) target = to;
-
-        bool stillHas = false;
-        if (const auto m = getRecord(memberId)) {
-            stillHas = foldKey(m->lastFour) == foldKey(target);
-            for (const auto& n : m->previousLastFour) stillHas = stillHas || foldKey(n) == foldKey(target);
-        }
-        Account withOldNumber = after;
-        for (CombinedPart& p : withOldNumber.combined)
-            if (p.accountId == memberId) p.lastFour = target;
-        const bool onlyNewerNumber = stillHas && accountLabel(withOldNumber) == accountLabel(before);
-        recordOldNames(before, after, {}, onlyNewerNumber);
     }
 
     // Remembers every file/folder name `before` produced that `after` no longer
@@ -576,6 +605,15 @@ struct Database::Impl {
 Database::Database(const fs::path& file)
     : impl_(std::make_unique<Impl>(utf8FromPath(file)))  // SQLite wants UTF-8 file names
 {
+}
+
+void Database::backupTo(const fs::path& file) const
+{
+    try {
+        impl_->copyTo(file);
+    } catch (const std::exception& e) {
+        throw DatabaseError(std::string("The backup could not be written: ") + e.what());
+    }
 }
 
 Database::Database(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -746,18 +784,17 @@ std::int64_t Database::createAccount(const AccountRecord& a)
         "INSERT INTO accounts (case_id, institution, account_type, last_four, institution_display, is_combined,"
         " opened_on, closed_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
     q.bind(1, a.caseId);
-    // A combined statement's institution and accounts come from its members.
-    q.bind(2, combined ? std::string() : trimmed(a.institution));
+    q.bind(2, trimmed(a.institution));
     q.bind(3, combined ? std::string() : trimmed(a.accountType));
     q.bind(4, combined ? std::string() : trimmed(a.lastFour));
-    q.bind(5, combined ? std::string() : institutionDisplayOrDefault(a));
+    q.bind(5, institutionDisplayOrDefault(a));
     q.bind(6, combined ? 1 : 0);
     q.bind(7, combined ? std::string() : dateToText(a.openedOn));
     q.bind(8, combined ? std::string() : dateToText(a.closedOn));
     q.exec();
     const std::int64_t id = impl_->db.getLastInsertRowid();
     impl_->writeOwners(id, a.ownerIds);
-    if (combined) impl_->writeMembers(id, a.memberIds);
+    if (combined) impl_->writeParts(id, a.parts);
     else impl_->writePreviousNumbers(id, a.previousLastFour);
     tx.commit();
     return id;
@@ -778,16 +815,18 @@ void Database::updateAccount(const AccountRecord& a, const NumberCorrections& nu
     SQLite::Transaction tx(impl_->db);
     const std::optional<Account> before = impl_->loadAccount(a.id);
     if (a.isCombined()) {
+        SQLite::Statement u(impl_->db,
+            "UPDATE accounts SET institution = ?, institution_display = ? WHERE id = ?");
+        u.bind(1, trimmed(a.institution));
+        u.bind(2, institutionDisplayOrDefault(a));
+        u.bind(3, a.id);
+        u.exec();
         impl_->writeOwners(a.id, a.ownerIds);
-        impl_->writeMembers(a.id, a.memberIds);
+        impl_->writeParts(a.id, a.parts);
         if (before) impl_->recordOldNames(*before, *impl_->loadAccount(a.id));
         tx.commit();
         return;
     }
-
-    // This account's type, number, institution... also appear in the names of
-    // the combined statements it is on.
-    const std::vector<Account> combinedBefore = impl_->loadAccounts(impl_->combinedContaining(a.id));
 
     SQLite::Statement q(impl_->db,
         "UPDATE accounts SET institution = ?, account_type = ?, last_four = ?, institution_display = ?,"
@@ -803,23 +842,11 @@ void Database::updateAccount(const AccountRecord& a, const NumberCorrections& nu
     impl_->writeOwners(a.id, a.ownerIds);
     impl_->writePreviousNumbers(a.id, a.previousLastFour);
     if (before) impl_->recordOldNames(*before, *impl_->loadAccount(a.id), numberCorrections);
-    for (const Account& c : combinedBefore)
-        impl_->recordMemberChange(c, *impl_->loadAccount(c.id), a.id, before ? before->lastFour : std::string(),
-                                  numberCorrections);
     tx.commit();
 }
 
 void Database::deleteAccount(std::int64_t accountId)
 {
-    std::string statements;
-    for (const Account& c : impl_->loadAccounts(impl_->combinedContaining(accountId))) {
-        if (!statements.empty()) statements += "; ";
-        statements += "\"" + accountLabel(c) + "\"";
-    }
-    if (!statements.empty())
-        throw DatabaseError("This account is on the combined statement " + statements +
-                            ". Remove it from that statement (or delete the statement) first.");
-
     SQLite::Statement q(impl_->db, "DELETE FROM accounts WHERE id = ?");
     q.bind(1, accountId);
     q.exec();
@@ -876,30 +903,71 @@ std::vector<OldAccountName> Database::oldAccountNames(std::int64_t caseId) const
     return out;
 }
 
-std::vector<std::string> Database::accountTypeSuggestions() const
+// ---- File name templates -----------------------------------------------------
+
+namespace {
+
+std::string trimmedName(const std::string& s)
 {
-    SQLite::Statement q(impl_->db, R"sql(
-        SELECT MIN(account_type) FROM accounts WHERE is_combined = 0
-        GROUP BY account_type COLLATE NOCASE
-        ORDER BY 1 COLLATE NOCASE)sql");
-    std::vector<std::string> out;
-    while (q.executeStep()) out.push_back(q.getColumn(0).getString());
+    const auto first = s.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    const auto last = s.find_last_not_of(" \t\r\n");
+    return s.substr(first, last - first + 1);
+}
+
+}  // namespace
+
+std::vector<DocumentTemplate> Database::listTemplates() const
+{
+    SQLite::Statement q(impl_->db,
+        "SELECT id, name, pattern, allow_period, use_date FROM document_templates ORDER BY name COLLATE NOCASE, id");
+    std::vector<DocumentTemplate> out;
+    while (q.executeStep())
+        out.push_back({q.getColumn(0).getInt64(), q.getColumn(1).getString(), q.getColumn(2).getString(),
+                       q.getColumn(3).getInt() != 0, q.getColumn(4).getInt() != 0});
     return out;
 }
 
-std::vector<InstitutionName> Database::institutionSuggestions() const
+static void checkTemplate(SQLite::Database& db, const DocumentTemplate& t, std::int64_t ownId)
 {
-    // One row per institution (ignoring letter case): the most recently added account's.
-    SQLite::Statement q(impl_->db, R"sql(
-        SELECT a.institution, a.institution_display FROM accounts a
-        WHERE a.is_combined = 0
-          AND a.id = (SELECT MAX(b.id) FROM accounts b
-                      WHERE b.is_combined = 0 AND b.institution = a.institution COLLATE NOCASE)
-        ORDER BY a.institution COLLATE NOCASE)sql");
-    std::vector<InstitutionName> out;
-    while (q.executeStep())
-        out.push_back({q.getColumn(0).getString(), q.getColumn(1).getString()});
-    return out;
+    if (auto err = validateTemplate(t)) throw DatabaseError(*err);
+    SQLite::Statement q(db, "SELECT COUNT(*) FROM document_templates WHERE name = ? COLLATE NOCASE AND id != ?");
+    q.bind(1, trimmedName(t.name));
+    q.bind(2, ownId);
+    q.executeStep();
+    if (q.getColumn(0).getInt() > 0)
+        throw DatabaseError("There is already a template named \"" + trimmedName(t.name) + "\".");
+}
+
+std::int64_t Database::createTemplate(const DocumentTemplate& t)
+{
+    checkTemplate(impl_->db, t, 0);
+    SQLite::Statement q(impl_->db, "INSERT INTO document_templates (name, pattern, allow_period, use_date) VALUES (?, ?, ?, ?)");
+    q.bind(1, trimmedName(t.name));
+    q.bind(2, t.pattern);
+    q.bind(3, t.allowPeriod ? 1 : 0);
+    q.bind(4, t.useDate ? 1 : 0);
+    q.exec();
+    return impl_->db.getLastInsertRowid();
+}
+
+void Database::updateTemplate(const DocumentTemplate& t)
+{
+    checkTemplate(impl_->db, t, t.id);
+    SQLite::Statement q(impl_->db, "UPDATE document_templates SET name = ?, pattern = ?, allow_period = ?, use_date = ? WHERE id = ?");
+    q.bind(1, trimmedName(t.name));
+    q.bind(2, t.pattern);
+    q.bind(3, t.allowPeriod ? 1 : 0);
+    q.bind(4, t.useDate ? 1 : 0);
+    q.bind(5, t.id);
+    if (q.exec() == 0) throw DatabaseError("That template no longer exists.");
+}
+
+void Database::deleteTemplate(std::int64_t id)
+{
+    SQLite::Statement q(impl_->db, "DELETE FROM document_templates WHERE id = ?");
+    q.bind(1, id);
+    q.exec();
 }
 
 // ---- Rename history -------------------------------------------------------

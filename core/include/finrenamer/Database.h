@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "finrenamer/DocumentName.h"
 #include "finrenamer/Models.h"
 #include "finrenamer/RenameEngine.h"
 
@@ -34,17 +35,16 @@ struct AccountRecord {
     std::string lastFour;
     std::vector<std::int64_t> ownerIds;
     std::vector<std::string> previousLastFour;  // older numbers of this same account, newest first
-    // Non-empty for a combined statement: the accounts it covers, in name order
-    // (at least two, same institution, same case). institution/accountType/
-    // lastFour are then ignored when saving; when loading, institution and
-    // institutionDisplay are filled in from the first account for display.
-    std::vector<std::int64_t> memberIds;
+    // Non-empty for a combined statement: the accounts on it (type and number as typed),
+    // in name order, at least two. institution/institutionDisplay/ownerIds are the
+    // statement's own; accountType/lastFour/previousLastFour are ignored when saving.
+    std::vector<CombinedPart> parts;
     // Optional dates for single accounts (ignored for combined statements).
     // The closing date can't be before the opening date.
     std::optional<std::chrono::year_month_day> openedOn;
     std::optional<std::chrono::year_month_day> closedOn;
 
-    bool isCombined() const { return !memberIds.empty(); }
+    bool isCombined() const { return !parts.empty(); }
 };
 
 // A person to add when creating a case.
@@ -55,12 +55,6 @@ struct NewPerson {
 
 // Husband (H), Wife (W), Joint (J) -- added to every new case by the app.
 std::vector<NewPerson> defaultCasePeople();
-
-// An institution used before, with the display name it was last given.
-struct InstitutionName {
-    std::string institution;
-    std::string displayName;
-};
 
 // One row of the rename history list.
 struct BatchSummary {
@@ -87,6 +81,11 @@ public:
     Database(const Database&) = delete;
     Database& operator=(const Database&) = delete;
 
+    // Writes a complete, consistent copy of the database to `file` (replacing it if it
+    // exists). Throws DatabaseError on failure. Opening an older database makes such a
+    // copy by itself first, next to the file: "<name>.backup-v<old version>".
+    void backupTo(const std::filesystem::path& file) const;
+
     // Schema version stored in the file (PRAGMA user_version).
     int schemaVersion() const;
 
@@ -110,7 +109,7 @@ public:
     std::vector<Person> listPeople(std::int64_t caseId) const;  // in the order they were added
 
     // ---- Accounts -------------------------------------------------------
-    // Accounts and combined statements (AccountRecord::memberIds) share these.
+    // Accounts and combined statements (AccountRecord::parts) share these.
     std::int64_t createAccount(const AccountRecord& a);  // a.id is ignored
     // Replaces owners and numbers too. `numberCorrections` lists numbers whose
     // text was corrected in this edit (old -> new, e.g. a typo "1243" -> "1234"),
@@ -118,7 +117,7 @@ public:
     // added, removed or reordered need no entry.
     using NumberCorrections = std::vector<std::pair<std::string, std::string>>;
     void updateAccount(const AccountRecord& a, const NumberCorrections& numberCorrections = {});
-    void deleteAccount(std::int64_t accountId);  // refused while on a combined statement
+    void deleteAccount(std::int64_t accountId);
     std::optional<AccountRecord> getAccount(std::int64_t accountId) const;
     std::vector<AccountRecord> listAccountRecords(std::int64_t caseId) const;
 
@@ -128,13 +127,13 @@ public:
     // statements come after its accounts.
     std::vector<Account> loadAccounts(std::int64_t caseId) const;
 
-    // Every account type used so far, across all cases, for the type field's
-    // autocomplete. Case-insensitive duplicates are merged.
-    std::vector<std::string> accountTypeSuggestions() const;
-
-    // Every institution used so far (across all cases), each with the display
-    // name from its most recently added account. For autocomplete/autofill.
-    std::vector<InstitutionName> institutionSuggestions() const;
+    // File name templates for the rename screen (shared by all cases), sorted by name.
+    // Names are unique ignoring letter case; the pattern must be valid (validateTemplate),
+    // otherwise DatabaseError.
+    std::vector<DocumentTemplate> listTemplates() const;
+    std::int64_t createTemplate(const DocumentTemplate& t);  // t.id is ignored
+    void updateTemplate(const DocumentTemplate& t);
+    void deleteTemplate(std::int64_t id);
 
     // Names this case's accounts used before edits changed them (recorded
     // automatically by updateAccount/updatePerson), for the name fixer.

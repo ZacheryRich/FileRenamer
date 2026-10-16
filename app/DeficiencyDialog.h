@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
+#include <string>
 #include <vector>
 
 #include "finrenamer/Database.h"
@@ -39,6 +41,13 @@ public:
     QString previewText() const;
 
     // Writes the current report to `file`. On failure returns false and says why.
+    // Whether a scan with new possible matches opens the review popup (tests turn it off).
+    void setAskAboutPossible(bool on) { askPossible_ = on; }
+    // The possible matches found by the last scan, and whether each is counted.
+    const std::vector<finrenamer::PossibleMatch>& possibleMatches() const { return scan_.possible; }
+    const std::vector<bool>& possibleIncluded() const { return included_; }
+    void setPossibleIncluded(const std::vector<bool>& included);  // also remembers them
+
     bool saveTo(const std::filesystem::path& file, QString* error = nullptr);
 
 private:
@@ -47,6 +56,10 @@ private:
     void saveAs();
     void showUnmatched();
     void showLoose();
+    void reviewPossible(bool onlyUndecided);
+    void rebuildEffective();
+    std::map<std::string, bool> rememberedDecisions() const;
+    void rememberDecisions() const;
     void showFileList(const QString& title, const QString& text, const std::vector<std::filesystem::path>& files);
     void loadSettings();
     void saveSettings() const;
@@ -60,7 +73,11 @@ private:
     QString caseName_;
 
     std::vector<finrenamer::Account> accounts_;  // single accounts only
-    finrenamer::CoverageScan scan_;
+    std::vector<finrenamer::Account> allAccounts_;  // including combined statements
+    finrenamer::CoverageScan scan_;       // exactly what the folders hold
+    finrenamer::CoverageScan effective_;  // scan_ with the ticked possible matches credited
+    std::vector<bool> included_;          // per scan_.possible: counted?
+    bool askPossible_ = true;
     finrenamer::DeficiencyReport report_;
     bool rangeChosen_ = false;  // false: From follows the earliest statement found
     bool loading_ = false;      // true while widgets are set from code
@@ -79,5 +96,6 @@ private:
     QLabel* summary_ = nullptr;
     QPushButton* unmatchedBtn_ = nullptr;
     QPushButton* looseBtn_ = nullptr;
+    QPushButton* possibleBtn_ = nullptr;
     QPushButton* saveBtn_ = nullptr;
 };

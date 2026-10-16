@@ -35,13 +35,13 @@ TEST_CASE("A new database is created at the current schema version")
     const fs::path file = dir.path() / "finrenamer.db";
     {
         Database db(file);
-        CHECK(db.schemaVersion() == 6);
+        CHECK(db.schemaVersion() == 9);
         db.createCase({0, "Persisted", ""});
     }
     CHECK(fs::exists(file));
 
     Database reopened(file);  // reopening must not re-run migrations
-    CHECK(reopened.schemaVersion() == 6);
+    CHECK(reopened.schemaVersion() == 9);
     REQUIRE(reopened.listCases().size() == 1);
     CHECK(reopened.listCases()[0].clientName == "Persisted");
 }
@@ -170,20 +170,6 @@ TEST_CASE("Deleting a case removes its people and accounts but keeps rename hist
     const auto history = s.db.listBatches();
     REQUIRE(history.size() == 1);
     CHECK_FALSE(history[0].caseId.has_value());  // case link cleared, history kept
-}
-
-TEST_CASE("Account type suggestions merge spellings that differ only in case")
-{
-    SmithCase s;
-    s.addAccount("Chase", "Checking", "1", {});
-    s.addAccount("Chase", "checking", "2", {});
-    s.addAccount("Fidelity", "Roth IRA", "3", {});
-    s.addAccount("Amex", "Credit Card", "4", {});
-
-    const auto types = s.db.accountTypeSuggestions();
-    REQUIRE(types.size() == 3);
-    CHECK(types[1] == "Credit Card");
-    CHECK(types[2] == "Roth IRA");
 }
 
 TEST_CASE("A saved batch reloads exactly and can still be undone after reopening")
@@ -338,12 +324,13 @@ TEST_CASE("A version 1 database is upgraded and keeps its data")
             INSERT INTO accounts (id, case_id, institution, account_type, last_four)
                 VALUES (1, 1, 'Chase', 'Checking', '1234');
             INSERT INTO account_owners VALUES (1, 1, 0);
+            DROP TABLE IF EXISTS document_templates;
             PRAGMA user_version = 1;
         )sql");
     }
 
     Database db(file);
-    CHECK(db.schemaVersion() == 6);
+    CHECK(db.schemaVersion() == 9);
     const auto people = db.listPeople(1);
     REQUIRE(people.size() == 1);
     CHECK(people[0].displayName == "José Núñez");
@@ -375,24 +362,6 @@ TEST_CASE("Institution display names are used in filenames and folder names")
     s.db.updateAccount({id, s.caseId, "Bank of America", "  ", "Checking", "1234", {s.john}});
     CHECK(s.db.getAccount(id)->institutionDisplay == "Bank of America");
     CHECK(accountLabel(s.db.loadAccounts(s.caseId)[0]) == "Bank of America Checking x1234 (John Smith)");
-}
-
-TEST_CASE("Institution suggestions remember the latest abbreviation for each bank")
-{
-    SmithCase s;
-    s.db.createAccount({0, s.caseId, "Bank of America", "BOA", "Checking", "1", {}});
-    s.db.createAccount({0, s.caseId, "bank of america", "BofA", "Savings", "2", {}});  // newer
-    s.db.createAccount({0, s.caseId, "Charles Schwab", "", "Brokerage", "3", {}});
-
-    const auto other = s.db.createCase({0, "Other", ""});
-    s.db.createAccount({0, other, "Ally", "", "Savings", "4", {}});  // other cases count too
-
-    const auto names = s.db.institutionSuggestions();
-    REQUIRE(names.size() == 3);
-    CHECK(names[0].institution == "Ally");
-    CHECK(names[1].institution == "bank of america");
-    CHECK(names[1].displayName == "BofA");
-    CHECK(names[2].displayName == "Charles Schwab");
 }
 
 TEST_CASE("Previous numbers are stored, validated and loaded")
@@ -452,100 +421,101 @@ TEST_CASE("Edits that change names are remembered as old names")
 
 // ---- Combined statements ---------------------------------------------------
 
-TEST_CASE("Combined statements are saved and named from their accounts")
+TEST_CASE("Combined statements are saved and named from the typed list")
 {
     SmithCase s;
     const auto chk = s.db.createAccount({0, s.caseId, "JPMorgan Chase", "Chase", "Chk", "1111", {s.john}});
-    const auto sav = s.db.createAccount({0, s.caseId, "JPMorgan Chase", "Chase", "Sav", "2222", {s.jane}});
-    const auto chk2 = s.addAccount("JPMorgan Chase", "Chk", "3333", {});
     s.addAccount("Ally", "Savings", "9999", {});
 
     AccountRecord c;
     c.caseId = s.caseId;
+    c.institution = "JPMorgan Chase";
+    c.institutionDisplay = "Chase";
     c.ownerIds = {s.jane, s.john};
-    c.memberIds = {chk, sav, chk2};
+    c.parts = {{"Chk", "1111"}, {"Sav", "2222"}, {"Chk", "3333"}};  // none need to exist as accounts
     const auto id = s.db.createAccount(c);
 
     const auto rec = s.db.getAccount(id);
     REQUIRE(rec);
     CHECK(rec->isCombined());
-    CHECK(rec->memberIds == std::vector<std::int64_t>{chk, sav, chk2});
-    CHECK(rec->institution == "JPMorgan Chase");  // from its accounts, for display
+    REQUIRE(rec->parts.size() == 3);
+    CHECK(rec->parts[1].accountType == "Sav");
+    CHECK(rec->parts[1].lastFour == "2222");
+    CHECK(rec->institution == "JPMorgan Chase");
+    CHECK(rec->institutionDisplay == "Chase");
     CHECK(rec->ownerIds == std::vector<std::int64_t>{s.jane, s.john});
 
     const auto accounts = s.db.loadAccounts(s.caseId);
-    REQUIRE(accounts.size() == 5);
+    REQUIRE(accounts.size() == 3);
     CHECK(accountLabel(accounts[0]) == "Ally Savings x9999");
+    CHECK(accounts[1].id == chk);
     const Account& combined = accounts.back();  // after the institution's own accounts
     REQUIRE(combined.isCombined());
     CHECK(accountLabel(combined) == "Chase Chk x1111, Sav x2222, Chk x3333 (Jane Smith; John Smith)");
     CHECK(accountFolderLabel(combined) == accountLabel(combined));
 
-    // Reorder and drop one.
+    // Reorder, drop one, change the institution's display name.
     c.id = id;
-    c.memberIds = {sav, chk};
+    c.parts = {{"Sav", "2222"}, {"Chk", "1111"}};
     c.ownerIds = {s.john};
+    c.institutionDisplay = "JPM";
     s.db.updateAccount(c);
-    CHECK(accountLabel(s.db.loadAccounts(s.caseId).back()) == "Chase Sav x2222, Chk x1111 (John Smith)");
-
-    // Combined statements don't feed the type/institution suggestions.
-    for (const auto& t : s.db.accountTypeSuggestions()) CHECK_FALSE(t.empty());
-    for (const auto& i : s.db.institutionSuggestions()) CHECK_FALSE(i.institution.empty());
+    CHECK(accountLabel(s.db.loadAccounts(s.caseId).back()) == "JPM Sav x2222, Chk x1111 (John Smith)");
 }
 
 TEST_CASE("Combined statement rules")
 {
     SmithCase s;
     const auto chk = s.addAccount("Chase", "Chk", "1111", {});
-    const auto sav = s.addAccount("chase", "Sav", "2222", {});  // same institution, any case
-    const auto ally = s.addAccount("Ally", "Savings", "9999", {});
 
     AccountRecord c;
     c.caseId = s.caseId;
-    c.memberIds = {chk};
+    c.institution = "Chase";
+    c.parts = {{"Chk", "1111"}};
     CHECK_THROWS_WITH(s.db.createAccount(c), ContainsSubstring("at least two"));
-    c.memberIds = {chk, chk};
+    c.parts = {{"Chk", "1111"}, {"chk", "1111"}};
     CHECK_THROWS_WITH(s.db.createAccount(c), ContainsSubstring("listed twice"));
-    c.memberIds = {chk, ally};
-    CHECK_THROWS_WITH(s.db.createAccount(c), ContainsSubstring("same institution"));
+    c.parts = {{"Chk", "1111"}, {"Sav", ""}};
+    CHECK_THROWS_WITH(s.db.createAccount(c), ContainsSubstring("no number"));
+    c.parts = {{"Chk", "1111"}, {"Sav", "2222"}};
+    c.institution = "  ";
+    CHECK_THROWS_WITH(s.db.createAccount(c), ContainsSubstring("needs an institution"));
+    c.institution = "Chase";
+    c.ownerIds = {999999};
+    CHECK_THROWS_WITH(s.db.createAccount(c), ContainsSubstring("owner"));
+    c.ownerIds = {};
 
-    const auto other = s.db.createCase({0, "Other", ""});
-    const auto foreign = s.db.createAccount({0, other, "Chase", "", "Chk", "4444", {}});
-    c.memberIds = {chk, foreign};
-    CHECK_THROWS_WITH(s.db.createAccount(c), ContainsSubstring("different case"));
-
-    c.memberIds = {chk, sav};
+    // Same numbers as an existing account is fine; they're just typed text. A blank type is fine too.
+    c.parts = {{"Chk", "1111"}, {"", "2222"}};
     const auto id = s.db.createAccount(c);
-    c.memberIds = {id, chk};
-    CHECK_THROWS_WITH(s.db.createAccount(c), ContainsSubstring("another combined statement"));
+    CHECK(accountLabel(s.db.loadAccounts(s.caseId).back()) == "Chase Chk x1111, x2222");
 
     // A single account can't become a combined statement or the reverse.
     AccountRecord single = *s.db.getAccount(chk);
-    single.memberIds = {sav, ally};
+    single.parts = {{"Chk", "1111"}, {"Sav", "2222"}};
     CHECK_THROWS_WITH(s.db.updateAccount(single), ContainsSubstring("can't be changed"));
 
-    // An account on a statement can't be deleted; the statement can.
-    CHECK_THROWS_WITH(s.db.deleteAccount(sav), ContainsSubstring("Chase Chk x1111, Sav x2222"));
+    // Accounts and statements are deleted independently.
+    s.db.deleteAccount(chk);
+    CHECK(s.db.loadAccounts(s.caseId).size() == 1);
     s.db.deleteAccount(id);
-    s.db.deleteAccount(sav);
-    CHECK(s.db.loadAccounts(s.caseId).size() == 2);
+    CHECK(s.db.loadAccounts(s.caseId).empty());
 
     // Deleting the whole case is fine.
-    c.memberIds = {chk, s.addAccount("Chase", "Sav", "5555", {})};
+    c.parts = {{"Chk", "1111"}, {"Sav", "5555"}};
     s.db.createAccount(c);
     s.db.deleteCase(s.caseId);
     CHECK(s.db.listAccountRecords(s.caseId).empty());
 }
 
-TEST_CASE("Editing an account records old names of its combined statements")
+TEST_CASE("Editing a combined statement records its old names")
 {
     SmithCase s;
-    const auto chk = s.addAccount("Chase", "Chekcing", "1111", {});
-    const auto sav = s.addAccount("Chase", "Savings", "2222", {});
     AccountRecord c;
     c.caseId = s.caseId;
+    c.institution = "Chase";
     c.ownerIds = {s.john};
-    c.memberIds = {chk, sav};
+    c.parts = {{"Chekcing", "1111"}, {"Savings", "2222"}};
     const auto id = s.db.createAccount(c);
 
     auto namesOf = [&](std::int64_t accountId) {
@@ -555,30 +525,27 @@ TEST_CASE("Editing an account records old names of its combined statements")
         return out;
     };
 
-    // A typo in a member's type: files and the folder were named the old way.
-    AccountRecord r = *s.db.getAccount(chk);
-    r.accountType = "Checking";
+    // A typo in a type: files and the folder were named the old way.
+    AccountRecord r = *s.db.getAccount(id);
+    r.parts[0].accountType = "Checking";
     s.db.updateAccount(r);
     const std::vector<std::pair<bool, std::string>> typo{
         {false, "Chase Chekcing x1111, Savings x2222 (John Smith)"},
         {true, "Chase Chekcing x1111, Savings x2222 (John Smith)"}};
     CHECK(namesOf(id) == typo);
 
-    // The savings account gets a newer number: older statements still show
-    // 2222 and keep their names; only the folder takes the new name.
-    r = *s.db.getAccount(sav);
-    r.previousLastFour = {r.lastFour};
-    r.lastFour = "7777";
-    s.db.updateAccount(r);
-    auto names = namesOf(id);
-    REQUIRE(names.size() == 3);
-    CHECK(names[2] == std::pair<bool, std::string>{true, "Chase Checking x1111, Savings x2222 (John Smith)"});
-
     // Renaming an owner of the statement.
     s.db.updatePerson(s.john, "John Smith", "H");
-    names = namesOf(id);
-    REQUIRE(names.size() == 5);
-    CHECK(names[3].second == "Chase Checking x1111, Savings x7777 (John Smith)");
+    const auto names = namesOf(id);
+    REQUIRE(names.size() == 4);
+    CHECK(names[2].second == "Chase Checking x1111, Savings x2222 (John Smith)");
+
+    // Editing an unrelated single account leaves the statement alone.
+    const auto chk = s.addAccount("Chase", "Checking", "1111", {});
+    AccountRecord single = *s.db.getAccount(chk);
+    single.accountType = "Chekcing";
+    s.db.updateAccount(single);
+    CHECK(namesOf(id).size() == 4);
 }
 
 TEST_CASE("A version 4 database is upgraded to combined statements")
@@ -592,26 +559,70 @@ TEST_CASE("A version 4 database is upgraded to combined statements")
         // ...turned back into version 4.
         SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
         old.exec(R"sql(
-            DROP TABLE combined_members;
+            DROP TABLE combined_parts;
             ALTER TABLE accounts DROP COLUMN is_combined;
             ALTER TABLE accounts DROP COLUMN opened_on;
             ALTER TABLE accounts DROP COLUMN closed_on;
             INSERT INTO cases (id, client_name) VALUES (1, 'Old Case');
             INSERT INTO accounts (id, case_id, institution, account_type, last_four, institution_display)
                 VALUES (1, 1, 'Chase', 'Checking', '1234', 'Chase');
+            DROP TABLE IF EXISTS document_templates;
             PRAGMA user_version = 4;
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 6);
+    CHECK(db.schemaVersion() == 9);
     REQUIRE(db.loadAccounts(1).size() == 1);
     CHECK_FALSE(db.loadAccounts(1)[0].isCombined());
-    const auto sav = db.createAccount({0, 1, "Chase", "", "Savings", "5678", {}});
     AccountRecord c;
     c.caseId = 1;
-    c.memberIds = {1, sav};
+    c.institution = "Chase";
+    c.parts = {{"Checking", "1234"}, {"Savings", "5678"}};
     db.createAccount(c);
     CHECK(accountLabel(db.loadAccounts(1).back()) == "Chase Checking x1234, Savings x5678");
+}
+
+TEST_CASE("A version 6 database keeps its combined statements, now with typed parts")
+{
+    testing::TempDir dir;
+    const fs::path file = dir.path() / "v6.db";
+    {
+        Database created(file);
+    }
+    {
+        // ...turned back into version 6: statements linked to accounts, institution left blank.
+        SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
+        old.exec(R"sql(
+            DROP TABLE combined_parts;
+            CREATE TABLE combined_members (
+                combined_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                position    INTEGER NOT NULL,
+                PRIMARY KEY (combined_id, account_id)
+            );
+            INSERT INTO cases (id, client_name) VALUES (1, 'Old Case');
+            INSERT INTO accounts (id, case_id, institution, account_type, last_four, institution_display)
+                VALUES (1, 1, 'JPMorgan Chase', 'Checking', '1234', 'Chase'),
+                       (2, 1, 'JPMorgan Chase', 'Savings', '5678', 'Chase');
+            INSERT INTO accounts (id, case_id, institution, account_type, last_four, institution_display, is_combined)
+                VALUES (3, 1, '', '', '', '', 1);
+            INSERT INTO combined_members VALUES (3, 2, 0), (3, 1, 1);
+            DROP TABLE IF EXISTS document_templates;
+            PRAGMA user_version = 6;
+        )sql");
+    }
+    Database db(file);
+    CHECK(db.schemaVersion() == 9);
+    const auto accounts = db.loadAccounts(1);
+    REQUIRE(accounts.size() == 3);
+    const Account& combined = accounts.back();
+    REQUIRE(combined.isCombined());
+    CHECK(accountLabel(combined) == "Chase Savings x5678, Checking x1234");
+    CHECK(combined.institution == "JPMorgan Chase");
+
+    // The linked accounts can now be deleted on their own.
+    db.deleteAccount(1);
+    CHECK(accountLabel(db.loadAccounts(1).back()) == "Chase Savings x5678, Checking x1234");
 }
 
 // ---- Opening and closing dates ----------------------------------------------
@@ -661,16 +672,24 @@ TEST_CASE("A version 5 database is upgraded to opening and closing dates")
     {
         SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
         old.exec(R"sql(
+            DROP TABLE combined_parts;
+            CREATE TABLE combined_members (
+                combined_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                position    INTEGER NOT NULL,
+                PRIMARY KEY (combined_id, account_id)
+            );
             ALTER TABLE accounts DROP COLUMN opened_on;
             ALTER TABLE accounts DROP COLUMN closed_on;
             INSERT INTO cases (id, client_name) VALUES (1, 'Old Case');
             INSERT INTO accounts (id, case_id, institution, account_type, last_four, institution_display, is_combined)
                 VALUES (1, 1, 'Chase', 'Checking', '1234', 'Chase', 0);
+            DROP TABLE IF EXISTS document_templates;
             PRAGMA user_version = 5;
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 6);
+    CHECK(db.schemaVersion() == 9);
     auto r = *db.getAccount(1);
     CHECK_FALSE(r.openedOn);
     CHECK_FALSE(r.closedOn);
@@ -697,4 +716,140 @@ TEST_CASE("An account can be saved without an account type")
     db.updateAccount(record);
     CHECK(db.getAccount(id)->accountType.empty());
     CHECK(accountLabel(db.loadAccounts(caseId)[0]) == "Chase x1234");
+}
+
+TEST_CASE("Templates are saved, listed by name, validated and deleted")
+{
+    Database db = Database::openInMemory();
+    CHECK(db.listTemplates().empty());
+
+    const auto email = db.createTemplate({0, "Email", "Email from {Sender} to {Recipient}[ ({Description})]", false});
+    const auto text = db.createTemplate({0, "  Text Conversation ", "Texts between {A} and {B}", true});
+    auto all = db.listTemplates();
+    REQUIRE(all.size() == 2);
+    CHECK(all[0].name == "Email");
+    CHECK(all[1].name == "Text Conversation");  // trimmed
+    CHECK(all[1].allowPeriod);
+
+    all[0].pattern = "Mail from {Sender}";
+    db.updateTemplate(all[0]);
+    CHECK(db.listTemplates()[0].pattern == "Mail from {Sender}");
+
+    CHECK_THROWS_AS(db.createTemplate({0, "EMAIL", "x {A}", false}), DatabaseError);   // name taken, any case
+    CHECK_THROWS_AS(db.createTemplate({0, "Bad", "x {A", false}), DatabaseError);      // bad pattern
+    CHECK_THROWS_AS(db.createTemplate({0, " ", "x {A}", false}), DatabaseError);       // no name
+    CHECK_THROWS_AS(db.createTemplate({0, "Other", "x {A}", false}), DatabaseError);   // built-in names
+    auto renamed = db.listTemplates()[1];
+    renamed.name = "email";
+    CHECK_THROWS_AS(db.updateTemplate(renamed), DatabaseError);
+    DocumentTemplate gone{9999, "Nope", "x", false};
+    CHECK_THROWS_AS(db.updateTemplate(gone), DatabaseError);
+
+    db.deleteTemplate(email);
+    REQUIRE(db.listTemplates().size() == 1);
+    CHECK(db.listTemplates()[0].id == text);
+}
+
+TEST_CASE("A version 7 database is upgraded and gets an empty template list")
+{
+    testing::TempDir dir;
+    const fs::path file = dir.path() / "v7.db";
+    {
+        Database created(file);
+    }
+    {
+        SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
+        old.exec(R"sql(
+            DROP TABLE document_templates;
+            INSERT INTO cases (id, client_name) VALUES (1, 'Old Case');
+            PRAGMA user_version = 7;
+        )sql");
+    }
+    Database db(file);
+    CHECK(db.schemaVersion() == 9);
+    CHECK(db.getCase(1).has_value());
+    CHECK(db.listTemplates().empty());
+    CHECK_NOTHROW(db.createTemplate({0, "Letter", "Ltr from {Sender}", false}));
+}
+
+TEST_CASE("Templates can leave the date out, and a version 8 database gets that setting")
+{
+    Database db = Database::openInMemory();
+    const auto id = db.createTemplate({0, "Undated", "Photo of {Thing}", false, false});
+    CHECK_FALSE(db.listTemplates()[0].useDate);
+    auto t = db.listTemplates()[0];
+    t.useDate = true;
+    db.updateTemplate(t);
+    CHECK(db.listTemplates()[0].useDate);
+    (void)id;
+
+    testing::TempDir dir;
+    const fs::path file = dir.path() / "v8.db";
+    {
+        Database created(file);
+    }
+    {
+        SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
+        old.exec(R"sql(
+            DROP TABLE document_templates;
+            CREATE TABLE document_templates (id INTEGER PRIMARY KEY, name TEXT NOT NULL, pattern TEXT NOT NULL,
+                                             allow_period INTEGER NOT NULL DEFAULT 0);
+            INSERT INTO document_templates (name, pattern, allow_period) VALUES ('Email', 'Email from {A}', 1);
+            PRAGMA user_version = 8;
+        )sql");
+    }
+    Database upgraded(file);
+    CHECK(upgraded.schemaVersion() == 9);
+    REQUIRE(upgraded.listTemplates().size() == 1);
+    CHECK(upgraded.listTemplates()[0].useDate);  // existing templates keep their date
+    CHECK(upgraded.listTemplates()[0].allowPeriod);
+}
+
+TEST_CASE("Upgrading an older database first leaves a backup copy beside it")
+{
+    testing::TempDir data;
+    const fs::path dbFile = data.path() / "finrenamer.db";
+    {
+        Database db(dbFile);
+        db.createCase({0, "Smith", ""});
+    }
+    CHECK_FALSE(fs::exists(data.path() / "finrenamer.db.backup-v9"));  // a new database needs none
+
+    // Pretend the file is an older version, then open it again.
+    {
+        SQLite::Database raw(utf8FromPath(dbFile), SQLite::OPEN_READWRITE);
+        raw.exec("DROP TABLE document_templates");
+        raw.exec("PRAGMA user_version = 7");
+    }
+    {
+        Database db(dbFile);
+        CHECK(db.schemaVersion() == 9);
+        CHECK(db.listCases().size() == 1);
+    }
+    const fs::path backup = data.path() / "finrenamer.db.backup-v7";
+    REQUIRE(fs::exists(backup));
+    {
+        SQLite::Database old(utf8FromPath(backup), SQLite::OPEN_READONLY);
+        CHECK(old.execAndGet("PRAGMA user_version").getInt() == 7);  // still the old version, old data
+        CHECK(old.execAndGet("SELECT COUNT(*) FROM cases").getInt() == 1);
+    }
+
+    // Opening a current database makes no further backup.
+    { Database db(dbFile); }
+    CHECK_FALSE(fs::exists(data.path() / "finrenamer.db.backup-v9"));
+    CHECK_FALSE(fs::exists(data.path() / "finrenamer.db.backup-v7-2"));
+}
+
+TEST_CASE("backupTo writes a complete copy that opens as a database, replacing an old file")
+{
+    testing::TempDir data;
+    Database db(data.path() / "finrenamer.db");
+    db.createCase({0, "Smith", ""});
+    const fs::path copy = data.path() / "it's a copy.db";  // a quote in the name must be safe
+    db.backupTo(copy);
+    db.createCase({0, "Jones", ""});
+    db.backupTo(copy);
+    Database restored(copy);
+    CHECK(restored.listCases().size() == 2);
+    CHECK_FALSE(fs::exists(data.path() / "it's a copy.db.writing"));
 }

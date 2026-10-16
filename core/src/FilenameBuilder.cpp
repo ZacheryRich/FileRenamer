@@ -127,3 +127,19 @@ std::optional<std::string> validateAccount(const Account& account)
 }
 
 }  // namespace finrenamer
+
+namespace finrenamer {
+
+bool isReservedWindowsName(std::string_view fileName)
+{
+    // Windows looks only at the part before the first dot, ignoring trailing spaces.
+    std::string base(fileName.substr(0, fileName.find('.')));
+    while (!base.empty() && base.back() == ' ') base.pop_back();
+    for (char& c : base)
+        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+    if (base == "CON" || base == "PRN" || base == "AUX" || base == "NUL") return true;
+    return base.size() == 4 && (base.compare(0, 3, "COM") == 0 || base.compare(0, 3, "LPT") == 0) &&
+           base[3] >= '1' && base[3] <= '9';
+}
+
+}  // namespace finrenamer

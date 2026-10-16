@@ -1,6 +1,7 @@
 #include <QApplication>
 #include <QDir>
 #include <QMessageBox>
+#include <QSettings>
 #include <QStandardPaths>
 
 #include <memory>
@@ -21,6 +22,13 @@ int main(int argc, char* argv[])
     const QString dataFolder = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     QDir().mkpath(dataFolder);
     const QString dbFile = QDir(dataFolder).filePath(QStringLiteral("finrenamer.db"));
+
+    // Older versions remembered text typed into file-name boxes in settings.ini (client names
+    // and descriptions, in plain text). That feature is gone; wipe what it left behind.
+    {
+        QSettings settings(ui::settingsFile(), QSettings::IniFormat);
+        settings.remove(QStringLiteral("templateValues"));
+    }
 
     std::unique_ptr<finrenamer::Database> db;
     try {

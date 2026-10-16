@@ -231,6 +231,22 @@ bool hasNumber(const std::vector<std::string>& hay, const std::string& number)
     return false;
 }
 
+bool isFiller(const std::string& w)
+{
+    static const char* const filler[] = {"statement", "statements", "stmt", "stmts", "acct", "account",
+                                         "accounts", "bank", "banking", "monthly", "quarterly", "annual",
+                                         "copy", "the", "for", "of", "and", "ending", "thru", "through",
+                                         "period", "dated", "scan", "scanned", "final", "pdf", "x", "combined"};
+    for (const char* f : filler)
+        if (w == f) return true;
+    return false;
+}
+
+bool allDigits(const std::string& w)
+{
+    return !w.empty() && std::all_of(w.begin(), w.end(), [](char ch) { return isDigit(ch); });
+}
+
 std::string lower(std::string t)
 {
     std::transform(t.begin(), t.end(), t.begin(), [](unsigned char ch) { return std::tolower(ch); });
@@ -272,10 +288,16 @@ LooseNameMatcher::LooseNameMatcher(const std::vector<Account>& accounts)
             if (!w.empty() && std::find(t.institutions.begin(), t.institutions.end(), w) == t.institutions.end())
                 t.institutions.push_back(std::move(w));
         }
+        for (const std::string& owner : a.owners)
+            for (auto& w : words(owner)) t.known.push_back(std::move(w));
         if (a.isCombined()) {
-            for (const CombinedPart& part : a.combined) t.numbers.push_back(lower(part.lastFour));
+            for (const CombinedPart& part : a.combined) {
+                t.numbers.push_back(lower(part.lastFour));
+                for (auto& w : words(part.accountType)) t.known.push_back(std::move(w));
+            }
         } else {
             t.type = words(a.accountType);
+            for (const auto& w : t.type) t.known.push_back(w);
             t.numbers.push_back(lower(a.lastFour));
             for (const auto& n : a.previousLastFour) t.numbers.push_back(lower(n));
         }
@@ -327,12 +349,28 @@ std::optional<LooseNameMatcher::Match> LooseNameMatcher::match(const std::string
         }
     }
 
-    if (combined) {
-        if (combinedTie) return std::nullopt;
-        return Match{combined->account, found->date};
+    const Terms* chosen = combined ? combined : single;
+    if (!chosen || (combined ? combinedTie : singleTie)) return std::nullopt;
+
+    // What is left of the name once everything the match explains is taken out.
+    std::vector<std::string> rest = hay;
+    for (const auto& inst : chosen->institutions) {
+        const auto at = std::search(rest.begin(), rest.end(), inst.begin(), inst.end());
+        if (!inst.empty() && at != rest.end()) rest.erase(at, at + static_cast<std::ptrdiff_t>(inst.size()));
     }
-    if (!single || singleTie) return std::nullopt;
-    return Match{single->account, found->date};
+    if (!chosen->type.empty()) {
+        const auto at = std::search(rest.begin(), rest.end(), chosen->type.begin(), chosen->type.end());
+        if (at != rest.end()) rest.erase(at, at + static_cast<std::ptrdiff_t>(chosen->type.size()));
+    }
+    Match result{chosen->account, found->date, {}};
+    for (const std::string& w : rest) {
+        bool explained = isFiller(w) || (allDigits(w) && w.size() <= 2);  // "(2)" copies
+        for (const std::string& n : chosen->numbers)
+            if (hasNumber({w}, n)) explained = true;
+        if (std::find(chosen->known.begin(), chosen->known.end(), w) != chosen->known.end()) explained = true;
+        if (!explained) result.extraWords.push_back(w);
+    }
+    return result;
 }
 
 }  // namespace finrenamer

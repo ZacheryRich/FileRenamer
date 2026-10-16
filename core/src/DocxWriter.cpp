@@ -257,6 +257,7 @@ std::string documentXml(const DeficiencyReport& report)
         body += table(t, report.showFound, report.showMissing);
         body += "<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr></w:p>";  // Word needs a paragraph after a table
     }
+    if (!report.footnote.empty()) body += paragraph("AccountNote", report.footnote);
     body += "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/>"
             "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" "
             "w:footer=\"720\" w:gutter=\"0\"/></w:sectPr>";

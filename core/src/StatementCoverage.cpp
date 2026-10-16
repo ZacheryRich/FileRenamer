@@ -24,6 +24,52 @@ Month monthOf(const chr::year_month_day& d)
 const char* const kMonthNames[12] = {"January", "February", "March",     "April",   "May",      "June",
                                      "July",    "August",   "September", "October", "November", "December"};
 
+std::string key(const std::string& text)
+{
+    return caseFoldKey(pathFromUtf8(text));
+}
+
+// A combined statement credits the case's single accounts it covers: same institution (full
+// or display name) and one of its numbers (current or older) matches a number on the statement.
+std::vector<std::int64_t> accountsOnStatement(const Account& statement, const std::vector<Account>& accounts)
+{
+    std::vector<std::int64_t> out;
+    for (const Account& a : accounts) {
+        if (a.isCombined()) continue;
+        const std::string inst = key(a.institution), shown = key(a.institutionDisplay);
+        bool sameInstitution = false;
+        for (const std::string& name : {statement.institution, statement.institutionDisplay}) {
+            const std::string k = key(name);
+            if (!k.empty() && (k == inst || k == shown)) sameInstitution = true;
+        }
+        if (!sameInstitution) continue;
+        bool numberOnStatement = false;
+        for (const CombinedPart& part : statement.combined) {
+            const std::string n = key(part.lastFour);
+            if (n == key(a.lastFour)) numberOnStatement = true;
+            for (const std::string& old : a.previousLastFour)
+                if (n == key(old)) numberOnStatement = true;
+        }
+        if (numberOnStatement) out.push_back(a.id);
+    }
+    return out;
+}
+
+void creditStatement(CoverageScan& scan, const std::vector<Account>& accounts, const Account& account,
+                     const DateSpec& date, bool isLoose)
+{
+    const auto months = monthsCovered(date);
+    auto credit = [&](std::int64_t accountId) {
+        scan.covered[accountId].insert(months.begin(), months.end());
+        (isLoose ? scan.looseCovered : scan.strictCovered)[accountId].insert(months.begin(), months.end());
+    };
+    if (account.isCombined()) {
+        for (const std::int64_t id : accountsOnStatement(account, accounts)) credit(id);
+    } else {
+        credit(account.id);
+    }
+}
+
 }  // namespace
 
 int monthIndex(Month m)
@@ -79,12 +125,18 @@ CoverageScan scanStatements(const std::vector<fs::path>& chosenFolders, bool inc
 
         const Account* account = nullptr;
         std::optional<DateSpec> date;
+        bool isLoose = false;
         if (entry) {
             account = entry->account;
             date = name->date;
         } else if (const auto guess = loose.match(stem)) {
+            if (!guess->clean()) {
+                scan.possible.push_back({file, guess->account->id, guess->date, guess->extraWords});
+                continue;
+            }
             account = guess->account;
             date = guess->date;
+            isLoose = true;
             scan.loose.push_back(file);
         }
         if (!account) {
@@ -92,18 +144,26 @@ CoverageScan scanStatements(const std::vector<fs::path>& chosenFolders, bool inc
             continue;
         }
         ++scan.matchedCount;
-
-        const auto months = monthsCovered(*date);
-        auto credit = [&](std::int64_t accountId) {
-            scan.covered[accountId].insert(months.begin(), months.end());
-        };
-        if (account->isCombined()) {
-            for (const CombinedPart& part : account->combined) credit(part.accountId);
-        } else {
-            credit(account->id);
-        }
+        creditStatement(scan, accounts, *account, *date, isLoose);
     }
     return scan;
+}
+
+CoverageScan applyPossibleMatches(const CoverageScan& scan, const std::vector<Account>& accounts,
+                                  const std::vector<bool>& included)
+{
+    CoverageScan out = scan;
+    for (std::size_t i = 0; i < scan.possible.size() && i < included.size(); ++i) {
+        if (!included[i]) continue;
+        const PossibleMatch& p = scan.possible[i];
+        const auto it = std::find_if(accounts.begin(), accounts.end(),
+                                     [&](const Account& a) { return a.id == p.accountId; });
+        if (it == accounts.end()) continue;
+        ++out.matchedCount;
+        out.loose.push_back(p.file);
+        creditStatement(out, accounts, *it, p.date, true);
+    }
+    return out;
 }
 
 std::vector<AccountCoverage> analyzeCoverage(const std::vector<Account>& accounts,
@@ -125,6 +185,10 @@ std::vector<AccountCoverage> analyzeCoverage(const std::vector<Account>& account
         const int last = a.closedOn ? std::min(toIndex, monthIndex(monthOf(*a.closedOn))) : toIndex;
         const auto statements = scan.covered.find(a.id);
         const std::set<Month>& have = statements == scan.covered.end() ? none : statements->second;
+        const auto strictIt = scan.strictCovered.find(a.id);
+        const std::set<Month>& strict = strictIt == scan.strictCovered.end() ? none : strictIt->second;
+        const auto looseIt = scan.looseCovered.find(a.id);
+        const std::set<Month>& looseSet = looseIt == scan.looseCovered.end() ? none : looseIt->second;
 
         for (int year = static_cast<int>(from.year()); year <= static_cast<int>(to.year()); ++year) {
             YearCoverage row;
@@ -133,7 +197,9 @@ std::vector<AccountCoverage> analyzeCoverage(const std::vector<Account>& account
                 const int index = year * 12 + static_cast<int>(m) - 1;
                 if (index < fromIndex || index > toIndex) continue;  // outside the report's range
                 if (index < first || index > last) continue;         // account not open then
-                (have.count(monthFromIndex(index)) ? row.found : row.missing).push_back(m);
+                const Month month = monthFromIndex(index);
+                (have.count(month) ? row.found : row.missing).push_back(m);
+                if (have.count(month) && looseSet.count(month) && !strict.count(month)) row.looseOnly.push_back(m);
             }
             row.notOpen = row.found.empty() && row.missing.empty();
             coverage.years.push_back(std::move(row));

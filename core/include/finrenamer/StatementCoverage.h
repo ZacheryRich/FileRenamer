@@ -31,18 +31,40 @@ std::string monthYearText(Month m);
 //   a whole year  -> all twelve months
 std::vector<Month> monthsCovered(const DateSpec& date);
 
+// A file whose name has a date, an account number and the institution or type, but also
+// other words ("Email from Chase to John re acct 1234"). Not credited unless the user
+// says it is a statement (applyPossibleMatches).
+struct PossibleMatch {
+    std::filesystem::path file;
+    std::int64_t accountId = 0;       // may be a combined statement's id
+    DateSpec date;
+    std::vector<std::string> extraWords;
+};
+
 // What a search of the case's folders found.
 struct CoverageScan {
     // Per account: the months with at least one statement file. A combined
     // statement counts for every account on it.
     std::map<std::int64_t, std::set<Month>> covered;
+    // The same months split by where they came from: names in this program's format
+    // (strictCovered) and names read by the looser reading (looseCovered). A month can be in both.
+    std::map<std::int64_t, std::set<Month>> strictCovered;
+    std::map<std::int64_t, std::set<Month>> looseCovered;
     std::size_t pdfCount = 0;
     std::size_t matchedCount = 0;                   // PDFs credited to an account
     std::vector<std::filesystem::path> unmatched;   // PDFs not named like a statement of this case
     // Matched by the looser reading (LooseNameMatcher): names that aren't in this
     // program's format but show a date, an account number and the institution or type.
     std::vector<std::filesystem::path> loose;       // (also counted in matchedCount)
+    // Loosely matched names with other words in them. NOT credited, NOT in matchedCount,
+    // and not in `unmatched` either; the user decides each one.
+    std::vector<PossibleMatch> possible;
 };
+
+// A copy of `scan` in which the possible matches with included[i] == true are credited
+// (and listed in `loose`). `accounts` is every account of the case, combined ones too.
+CoverageScan applyPossibleMatches(const CoverageScan& scan, const std::vector<Account>& accounts,
+                                  const std::vector<bool>& included);
 
 // Reads the names of every PDF in the chosen folders: the date and account come
 // from the name. Names in this program's format come first (including names an
@@ -57,6 +79,7 @@ struct YearCoverage {
     int year = 0;
     std::vector<unsigned> found;    // months 1..12 with a statement
     std::vector<unsigned> missing;  // months 1..12 expected but without one
+    std::vector<unsigned> looseOnly;  // months in `found` backed only by files not named in the program's format
     bool notOpen = false;           // the account wasn't open at any point of this year's range
 };
 

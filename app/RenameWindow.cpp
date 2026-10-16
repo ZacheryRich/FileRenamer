@@ -1,5 +1,9 @@
 #include "RenameWindow.h"
 
+#include <QApplication>
+#include <QPointer>
+#include <QAbstractButton>
+
 #include <algorithm>
 
 #include <QCheckBox>
@@ -26,6 +30,7 @@
 #include "AccountDialog.h"
 #include "DateWidgets.h"
 #include "PdfPreview.h"
+#include "TemplatesDialog.h"
 #include "UpdateNamesDialog.h"
 #include "QtHelpers.h"
 #include "finrenamer/FilenameBuilder.h"
@@ -42,6 +47,8 @@ enum Column { ColFile = 0, ColNewName = 1, ColFolder = 2, ColStatus = 3 };
 // the number to use ("" = the account's current number).
 constexpr int kAccountIdRole = Qt::UserRole;
 constexpr int kNumberRole = Qt::UserRole;
+// Type dropdown entries: Qt::UserRole = DocKind, this = the template's id.
+constexpr int kTemplateIdRole = Qt::UserRole + 1;
 
 const QColor kGreen(0x10, 0x7c, 0x10);
 const QColor kRed(0xc4, 0x2b, 0x1c);
@@ -66,7 +73,7 @@ StatusView describe(const SessionRow& row, const PlannedMove& move)
     case MoveStatus::Unchanged: return {QObject::tr("Already named correctly"), kGrey};
     case MoveStatus::Skipped: return {QObject::tr("Skipped"), kGrey};
     case MoveStatus::Incomplete:
-        if (!move.message.empty()) return {qstr(move.message), {}};  // what an email/text/letter still needs
+        if (!move.message.empty()) return {qstr(move.message), {}};  // what a template or other file still needs
         if (!row.accountId && !row.date) return {QObject::tr("Needs account and date"), {}};
         if (!row.accountId) return {QObject::tr("Needs account"), {}};
         return {QObject::tr("Needs date"), {}};
@@ -104,6 +111,7 @@ RenameWindow::RenameWindow(Database& db, std::int64_t caseId, QWidget* parent)
     runGuarded(this, [&] { c = db_.getCase(caseId_); });
     setWindowTitle(tr("File Renamer - %1").arg(c ? qstr(c->clientName) : QString()));
 
+    runGuarded(this, [&] { templates_ = db_.listTemplates(); });
     buildUi();
     reloadAccounts();
     rebuildTable();
@@ -141,7 +149,7 @@ void RenameWindow::buildUi()
     order_->addItems({tr("Account → Year"), tr("Year → Account")});
     {
         auto* note = new QLabel(tr("These settings apply to financial statements only.\n"
-                                   "Emails, texts, letters and other files are renamed where they are."));
+                                   "Templates and other files are renamed where they are."));
         note->setWordWrap(true);
         auto* orderRow = new QHBoxLayout;
         orderRow->addWidget(new QLabel(tr("Folder order:")));
@@ -202,12 +210,11 @@ void RenameWindow::buildUi()
     fileLabel_->setWordWrap(true);
 
     kind_ = new QComboBox;
-    kind_->addItem(tr("Statement"), static_cast<int>(DocKind::Statement));
-    kind_->addItem(tr("Email"), static_cast<int>(DocKind::Email));
-    kind_->addItem(tr("Text"), static_cast<int>(DocKind::Text));
-    kind_->addItem(tr("Letter"), static_cast<int>(DocKind::Letter));
-    kind_->addItem(tr("Other"), static_cast<int>(DocKind::Other));
-    kind_->setToolTip(tr("What this file is. Statements are named from an account; the others from what you type."));
+    kind_->setToolTip(tr("What this file is. Statements are named from an account; templates and Other from what you type."));
+    templatesBtn_ = new QPushButton(tr("Templates..."));
+    templatesBtn_->setObjectName("templates");
+    templatesBtn_->setToolTip(tr("Add, change or delete the file name templates in this list (Email, Text, Letter...)"));
+    fillKindCombo();
 
     account_ = new QComboBox;
     account_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
@@ -223,14 +230,11 @@ void RenameWindow::buildUi()
     accountRow->addWidget(editAccountBtn_);
     accountRow->addWidget(newAccountBtn_);
 
-    textStyle_ = new QComboBox;
-    textStyle_->addItem(tr("One message"), static_cast<int>(TextStyle::Single));
-    textStyle_->addItem(tr("Conversation (two people)"), static_cast<int>(TextStyle::Conversation));
-    textStyle_->addItem(tr("Group chat"), static_cast<int>(TextStyle::Group));
     label_ = new QLineEdit;
-    from_ = new QLineEdit;
-    to_ = new QLineEdit;
     description_ = new QLineEdit;
+    useDate_ = new QCheckBox(tr("Start the name with a date"));
+    useDate_->setObjectName("includeDate");
+    useDate_->setChecked(true);
     description_->setPlaceholderText(tr("Optional"));
 
     date_ = new DateSpecEditor;
@@ -269,14 +273,17 @@ void RenameWindow::buildUi()
     numberRow->addWidget(number_);
     numberRow->addStretch();
 
-    form->addRow(tr("Type:"), kind_);
+    auto* kindBox = new QWidget;
+    auto* kindRow = new QHBoxLayout(kindBox);
+    kindRow->setContentsMargins(0, 0, 0, 0);
+    kindRow->addWidget(kind_, 1);
+    kindRow->addWidget(templatesBtn_);
+    form->addRow(tr("Type:"), kindBox);
     form->addRow(tr("Account:"), accountBox_);
     form->addRow(tr("Number:"), numberBox_);
-    form->addRow(tr("Kind of text:"), textStyle_);
     form->addRow(tr("Label:"), label_);
-    form->addRow(tr("From:"), from_);
-    form->addRow(tr("To:"), to_);
     form->addRow(tr("Description:"), description_);
+    form->addRow(QString(), useDate_);
     form->addRow(tr("Date:"), date_);
     form->addRow(QString(), skip_);
 
@@ -328,14 +335,11 @@ void RenameWindow::buildUi()
     layout->addWidget(mainSplitter_, 1);
     layout->addLayout(bottom);
 
-    editFields_ = {kind_, account_, newAccountBtn_, textStyle_, label_, from_, to_, description_, date_};
+    editFields_ = {kind_, account_, newAccountBtn_, label_, description_, useDate_, date_};
 
     // Names for automated GUI tests.
     kind_->setObjectName("kind");
-    textStyle_->setObjectName("textStyle");
     label_->setObjectName("label");
-    from_->setObjectName("from");
-    to_->setObjectName("to");
     description_->setObjectName("description");
     table_->setObjectName("files");
     account_->setObjectName("account");
@@ -374,8 +378,13 @@ void RenameWindow::buildUi()
     });
     connect(number_, &QComboBox::currentIndexChanged, this, &RenameWindow::commitEditor);
     connect(kind_, &QComboBox::currentIndexChanged, this, &RenameWindow::kindChanged);
-    connect(textStyle_, &QComboBox::currentIndexChanged, this, &RenameWindow::kindChanged);
-    for (auto* edit : {label_, from_, to_, description_})
+    connect(templatesBtn_, &QPushButton::clicked, this, &RenameWindow::manageTemplates);
+    connect(useDate_, &QCheckBox::toggled, this, [this] {
+        if (loadingEditor_) return;
+        updateKindFields();
+        commitEditor();
+    });
+    for (auto* edit : {label_, description_})
         connect(edit, &QLineEdit::textChanged, this, &RenameWindow::commitEditor);
     connect(date_, &DateSpecEditor::changed, this, &RenameWindow::commitEditor);
     connect(skip_, &QCheckBox::toggled, this, &RenameWindow::commitEditor);
@@ -545,7 +554,7 @@ void RenameWindow::updatePreview()
         if (row.isDocument() && showName) {
             // Account and year folders are for statements only.
             folderItem->setText(tr("(stays here)"));
-            folderItem->setToolTip(tr("Emails, texts, letters and other files are renamed where they are."));
+            folderItem->setToolTip(tr("Only statements go into account and year folders; other files are renamed where they are."));
         } else {
             folderItem->setText(folder == QStringLiteral(".") ? QString() : folder);
             folderItem->setToolTip(folderItem->text());
@@ -649,7 +658,7 @@ void RenameWindow::loadEditor()
         skip_->setChecked(false);
         rowStatus_->clear();
         pdf_->clear();
-        for (QWidget* w : editFields_) w->setEnabled(false);
+        setEditorEnabled(false);
         for (QWidget* w : std::initializer_list<QWidget*>{skip_, openBtn_, nextBtn_}) w->setEnabled(false);
         fillNumbers(std::nullopt, {});
         loadingEditor_ = false;
@@ -664,19 +673,18 @@ void RenameWindow::loadEditor()
 
     const int index = accountIndex(row.accountId);
     account_->setCurrentIndex(index >= 0 ? index : 0);
-    kind_->setCurrentIndex(std::max(0, kind_->findData(static_cast<int>(row.document.kind))));
-    textStyle_->setCurrentIndex(std::max(0, textStyle_->findData(static_cast<int>(row.document.textStyle))));
+    kind_->setCurrentIndex(std::max(0, kindIndex(row.document)));
     label_->setText(qstr(row.document.label));
-    from_->setText(qstr(row.document.sender));
-    to_->setText(qstr(row.document.recipient));
     description_->setText(qstr(row.document.description));
+    useDate_->setChecked(!row.document.noDate);
+    syncFieldEdits(row.document);
     updateKindFields();  // before the date is set, so the date box offers the right modes
     date_->setValue(row.date);
     skip_->setChecked(row.skip);
 
     const bool editable = !row.done;
     skip_->setEnabled(editable);
-    for (QWidget* w : editFields_) w->setEnabled(editable && !row.skip);
+    setEditorEnabled(editable && !row.skip);
     fillNumbers(row.accountId, row.number);
     openBtn_->setEnabled(true);
     nextBtn_->setEnabled(true);
@@ -702,70 +710,129 @@ void RenameWindow::commitEditor()
     row.skip = skip_->isChecked();
     row.failure.clear();
 
-    for (QWidget* w : editFields_) w->setEnabled(!row.skip);
+    setEditorEnabled(!row.skip);
     number_->setEnabled(!row.skip && number_->count() > 1);
     updatePreview();
 }
 
 DocumentInfo RenameWindow::editorDocument() const
 {
+    // Start from what the row holds, so text typed under another type isn't lost by switching.
     DocumentInfo d;
+    if (session_)
+        if (const auto cur = currentRow()) d = session_->row(*cur).document;
     d.kind = static_cast<DocKind>(kind_->currentData().toInt());
-    d.textStyle = static_cast<TextStyle>(textStyle_->currentData().toInt());
     d.label = stdstr(label_->text());
-    d.sender = stdstr(from_->text());
-    d.recipient = stdstr(to_->text());
     d.description = stdstr(description_->text());
+    d.noDate = !useDate_->isChecked();
+    if (d.kind == DocKind::Template) {
+        const std::int64_t id = kind_->currentData(kTemplateIdRole).toLongLong();
+        const auto found = std::find_if(templates_.begin(), templates_.end(),
+                                        [&](const DocumentTemplate& t) { return t.id == id; });
+        if (found != templates_.end()) d.tmpl = *found;
+        // The boxes on screen belong to this template only once they have been rebuilt for it.
+        if (haveShown_ && shownTemplate_.id == d.tmpl.id && shownTemplate_.pattern == d.tmpl.pattern)
+            for (const FieldEdit& fe : fieldEdits_) d.fields[fe.key] = stdstr(fe.edit->text());
+    }
     return d;
 }
 
-// Shows only the fields the chosen kind uses, with captions to match, and limits
-// the date box to the modes that kind accepts.
+void RenameWindow::fillKindCombo()
+{
+    const QSignalBlocker block(kind_);
+    kind_->clear();
+    kind_->addItem(tr("Statement"), static_cast<int>(DocKind::Statement));
+    for (const DocumentTemplate& t : templates_) {
+        kind_->addItem(qstr(t.name), static_cast<int>(DocKind::Template));
+        kind_->setItemData(kind_->count() - 1, static_cast<qlonglong>(t.id), kTemplateIdRole);
+    }
+    kind_->addItem(tr("Other"), static_cast<int>(DocKind::Other));
+}
+
+int RenameWindow::kindIndex(const DocumentInfo& info) const
+{
+    for (int i = 0; i < kind_->count(); ++i) {
+        if (kind_->itemData(i).toInt() != static_cast<int>(info.kind)) continue;
+        if (info.kind != DocKind::Template || kind_->itemData(i, kTemplateIdRole).toLongLong() == info.tmpl.id)
+            return i;
+    }
+    return -1;
+}
+
+void RenameWindow::setEditorEnabled(bool enabled)
+{
+    for (QWidget* w : editFields_) w->setEnabled(enabled);
+    for (const FieldEdit& fe : fieldEdits_) fe.edit->setEnabled(enabled);
+}
+
+// Makes the template's boxes match `info`: rebuilt when the template differs from the one shown,
+// otherwise left alone (so the cursor can stay in a box from one file to the next). Then the
+// typed text is filled in.
+void RenameWindow::syncFieldEdits(const DocumentInfo& info)
+{
+    const bool want = info.kind == DocKind::Template;
+    const bool same = want ? haveShown_ && shownTemplate_.id == info.tmpl.id && shownTemplate_.pattern == info.tmpl.pattern
+                           : !haveShown_;
+    if (!same) {
+        for (const FieldEdit& fe : fieldEdits_) {
+            int row = -1;
+            QFormLayout::ItemRole role;
+            form_->getWidgetPosition(fe.edit, &row, &role);
+            if (row >= 0) form_->removeRow(row);  // deletes the label and the box
+        }
+        fieldEdits_.clear();
+        haveShown_ = false;
+
+        if (want) {
+            int at = 0;
+            QFormLayout::ItemRole role;
+            form_->getWidgetPosition(label_, &at, &role);
+            QWidget* previous = number_;
+            for (const TemplateField& f : templateFields(info.tmpl.pattern)) {
+                auto* edit = new QLineEdit;
+                const std::string key = fieldKey(f.name);
+                QString objectKey = qstr(key);
+                objectKey.replace(' ', '_');
+                edit->setObjectName(QStringLiteral("field_") + objectKey);
+                if (f.optional) edit->setPlaceholderText(tr("Optional"));
+                QString caption = qstr(f.name);
+                caption.replace('&', QStringLiteral("&&"));
+                form_->insertRow(at++, caption + QStringLiteral(":"), edit);
+                connect(edit, &QLineEdit::textChanged, this, &RenameWindow::commitEditor);
+                QWidget::setTabOrder(previous, edit);
+                previous = edit;
+                fieldEdits_.push_back({key, edit});
+            }
+            QWidget::setTabOrder(previous, label_);
+            shownTemplate_ = info.tmpl;
+            haveShown_ = true;
+        }
+    }
+    if (!want) return;
+    for (const FieldEdit& fe : fieldEdits_) {
+        const auto it = info.fields.find(fe.key);
+        const QString text = it == info.fields.end() ? QString() : qstr(it->second);
+        if (fe.edit->text() == text) continue;
+        const QSignalBlocker block(fe.edit);
+        fe.edit->setText(text);
+    }
+}
+
+// Shows only the fields the chosen type uses, and limits the date box to the modes it accepts.
 void RenameWindow::updateKindFields()
 {
     const DocumentInfo info = editorDocument();
     const bool statement = info.kind == DocKind::Statement;
-    const bool text = info.kind == DocKind::Text;
-    const bool hasLabel = text || info.kind == DocKind::Letter || info.kind == DocKind::Other;
-    const bool hasFrom = info.kind == DocKind::Email || text || info.kind == DocKind::Letter;
-    const bool hasTo = info.kind == DocKind::Email ||
-                       (text && info.textStyle != TextStyle::Group);
-    const bool hasDescription = !statement;
+    const bool other = info.kind == DocKind::Other;
 
     form_->setRowVisible(accountBox_, statement);
     form_->setRowVisible(numberBox_, statement);
-    form_->setRowVisible(textStyle_, text);
-    form_->setRowVisible(label_, hasLabel);
-    form_->setRowVisible(from_, hasFrom);
-    form_->setRowVisible(to_, hasTo);
-    form_->setRowVisible(description_, hasDescription);
-
-    auto caption = [this](QWidget* field, const QString& textValue) {
-        if (auto* l = qobject_cast<QLabel*>(form_->labelForField(field))) l->setText(textValue);
-    };
-    QString fromCaption = tr("From:"), toCaption = tr("To:"), labelCaption = tr("Label:");
-    QString labelHint, fromHint = tr("Name"), toHint = tr("Name");
-    if (text) {
-        labelCaption = tr("Label:");
-        labelHint = tr("Texts, WhatsApp, Our Family Wizard...");
-        if (info.textStyle == TextStyle::Conversation) {
-            fromCaption = tr("Between:");
-            toCaption = tr("and:");
-        } else if (info.textStyle == TextStyle::Group) {
-            fromCaption = tr("With:");
-            fromHint = tr("The people, or the group's name");
-        }
-    } else if (info.kind == DocKind::Letter) {
-        labelHint = tr("Ltr");
-    } else if (info.kind == DocKind::Other) {
-        labelHint = tr("What it is, e.g. Photo, Court Order, Invoice");
-    }
-    caption(from_, fromCaption);
-    caption(to_, toCaption);
-    caption(label_, labelCaption);
-    label_->setPlaceholderText(labelHint);
-    from_->setPlaceholderText(fromHint);
-    to_->setPlaceholderText(toHint);
+    form_->setRowVisible(label_, other);
+    form_->setRowVisible(description_, other);
+    form_->setRowVisible(useDate_, other);
+    form_->setRowVisible(date_, documentUsesDate(info));
+    label_->setPlaceholderText(tr("What it is, e.g. Photo, Court Order, Invoice"));
+    description_->setPlaceholderText(tr("Optional"));
 
     const DateModes modes = allowedDateModes(info);
     date_->setModes(modes.period, modes.quarter);
@@ -774,18 +841,24 @@ void RenameWindow::updateKindFields()
 void RenameWindow::kindChanged()
 {
     if (loadingEditor_) return;
-    // A kind's usual label is filled in, unless the user has typed their own.
-    const DocKind kind = static_cast<DocKind>(kind_->currentData().toInt());
-    const QString current = label_->text().trimmed();
-    if (current.isEmpty() || current == qstr(std::string(kDefaultTextLabel)) ||
-        current == qstr(std::string(kDefaultLetterLabel))) {
-        const QSignalBlocker block(label_);
-        label_->setText(kind == DocKind::Text     ? qstr(std::string(kDefaultTextLabel))
-                        : kind == DocKind::Letter ? qstr(std::string(kDefaultLetterLabel))
-                                                  : QString());
-    }
+    const DocumentInfo info = editorDocument();
+    syncFieldEdits(info);
     updateKindFields();
     commitEditor();
+    if (info.kind == DocKind::Template && !fieldEdits_.empty()) fieldEdits_.front().edit->setFocus();
+}
+
+void RenameWindow::manageTemplates()
+{
+    commitEditor();
+    TemplatesDialog dialog(db_, this);
+    dialog.exec();
+
+    runGuarded(this, [&] { templates_ = db_.listTemplates(); });
+    if (session_) session_->refreshTemplates(templates_);
+    fillKindCombo();
+    shownTemplate_.id = -1;  // the template text may have changed: rebuild the boxes
+    loadEditor();
 }
 
 void RenameWindow::goToNext()
@@ -801,9 +874,18 @@ void RenameWindow::goToNext()
         return;
     }
 
+    // Keep the cursor in the field it was in (e.g. Description) when that field is still usable
+    // on the next file; otherwise fall back to the date / account.
+    QPointer<QWidget> keep = QApplication::focusWidget();
+    if (keep && (keep == table_ || table_->isAncestorOf(keep) || qobject_cast<QAbstractButton*>(keep)))
+        keep = nullptr;
+
     const bool carried = session_->carryForward(*cur, *next);
     selectRow(static_cast<int>(*next));
-    if (carried) date_->focusFirstField();  // most likely thing to adjust
+    if (keep && keep->isEnabled() && keep->isVisibleTo(this) && isAncestorOf(keep)) {
+        keep->setFocus();
+        if (auto* edit = qobject_cast<QLineEdit*>(keep.data())) edit->selectAll();
+    } else if (carried) date_->focusFirstField();  // most likely thing to adjust
     else account_->setFocus();
 }
 

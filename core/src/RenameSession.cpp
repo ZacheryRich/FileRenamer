@@ -1,5 +1,7 @@
 #include "finrenamer/RenameSession.h"
 
+#include <algorithm>
+
 #include <unordered_set>
 
 #include "finrenamer/FileScanner.h"
@@ -114,7 +116,7 @@ bool RenameSession::carryForward(std::size_t from, std::size_t to)
     if (dst.done || !dst.isBlank() || src.skip) return false;
     if (src.isDocument()) {
         dst.document = src.document;
-        dst.document.description.clear();
+        clearOptionalFields(dst.document);  // the optional boxes (e.g. a description) are per file
         dst.date = src.date;
         return true;
     }
@@ -189,6 +191,28 @@ std::optional<SessionUndoResult> RenameSession::undoLast()
         }
     }
     return out;
+}
+
+void RenameSession::refreshTemplates(const std::vector<DocumentTemplate>& templates)
+{
+    for (SessionRow& r : rows_) {
+        if (r.done || r.document.kind != DocKind::Template) continue;
+        const auto found = std::find_if(templates.begin(), templates.end(),
+                                        [&](const DocumentTemplate& t) { return t.id == r.document.tmpl.id; });
+        if (found != templates.end()) {
+            r.document.tmpl = *found;  // typed text stays: boxes are matched by name
+            continue;
+        }
+        // The template was deleted. Keep what the user typed as a one-off "Other" name.
+        const std::string label = documentLabel(r.document);
+        const bool typed = std::any_of(r.document.fields.begin(), r.document.fields.end(),
+                                       [](const auto& kv) { return !kv.second.empty(); });
+        r.document = DocumentInfo{};
+        if (typed && !label.empty()) {
+            r.document.kind = DocKind::Other;
+            r.document.label = label;
+        }
+    }
 }
 
 }  // namespace finrenamer

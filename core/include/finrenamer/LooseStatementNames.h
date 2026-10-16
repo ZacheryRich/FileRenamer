@@ -32,7 +32,13 @@ public:
     struct Match {
         const Account* account = nullptr;
         DateSpec date;
+        // Words in the name that the match doesn't explain: not the date, institution,
+        // type, number, owners, or filler like "statement". A real statement has few;
+        // "Email from Chase to John re acct 1234" has several.
+        std::vector<std::string> extraWords;
+        bool clean() const { return extraWords.size() <= kMaxExtraWords; }
     };
+    static constexpr std::size_t kMaxExtraWords = 1;
 
     // `accounts` must outlive the matcher.
     explicit LooseNameMatcher(const std::vector<Account>& accounts);
@@ -45,6 +51,7 @@ private:
         std::vector<std::vector<std::string>> institutions;  // each as words
         std::vector<std::string> type;                       // words
         std::vector<std::string> numbers;                    // lower-case
+        std::vector<std::string> known;                      // owner and type words (explained)
     };
     std::vector<Terms> terms_;
 };

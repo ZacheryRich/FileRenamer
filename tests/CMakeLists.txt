@@ -22,10 +22,12 @@ add_executable(finrenamer_tests
     StatementCoverageTests.cpp
     BatesSheetTests.cpp
     DocumentNameTests.cpp
+    VacationTests.cpp
+    PdfUnlockTests.cpp
 )
 # SQLiteCpp is linked directly only so a test can build an old-format database;
 # OpenXLSX so tests can read the spreadsheets back.
-target_link_libraries(finrenamer_tests PRIVATE finrenamer_core SQLiteCpp OpenXLSX::OpenXLSX Catch2::Catch2WithMain)
+target_link_libraries(finrenamer_tests PRIVATE finrenamer_core SQLiteCpp OpenXLSX::OpenXLSX ${FINRENAMER_QPDF_TARGET} Catch2::Catch2WithMain)
 
 include(Catch)
 catch_discover_tests(finrenamer_tests)

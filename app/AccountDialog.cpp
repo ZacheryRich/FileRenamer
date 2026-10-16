@@ -1,11 +1,14 @@
 #include "AccountDialog.h"
 
+#include <QMessageBox>
 #include <QComboBox>
-#include <QCompleter>
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QHeaderView>
+#include <QStyledItemDelegate>
+#include <QTableWidget>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -70,39 +73,15 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
 
     // ---- Account fields ----
     institution_ = new QLineEdit;
+    institution_->setObjectName("institution");
     institution_->setPlaceholderText(tr("e.g. Chase"));
 
     institutionDisplay_ = new QLineEdit;
     institutionDisplay_->setPlaceholderText(tr("Same as institution"));
     institutionDisplay_->setToolTip(tr("What appears in filenames, e.g. \"BofA\" for Bank of America."));
 
-    // Institutions used before (any case) autocomplete, and bring their
-    // abbreviation with them.
-    QStringList institutions;
-    runGuarded(this, [&] {
-        for (const auto& known : db_.institutionSuggestions()) {
-            const QString name = qstr(known.institution);
-            institutions << name;
-            if (known.displayName != known.institution)
-                knownDisplayNames_.insert(name.toLower(), qstr(known.displayName));
-        }
-    });
-    auto* institutionCompleter = new QCompleter(institutions, this);
-    institutionCompleter->setCaseSensitivity(Qt::CaseInsensitive);
-    institutionCompleter->setFilterMode(Qt::MatchContains);
-    institution_->setCompleter(institutionCompleter);
-
     type_ = new QLineEdit;
     type_->setPlaceholderText(tr("Optional, e.g. Checking, Roth IRA, Credit Card"));
-    QStringList types;
-    runGuarded(this, [&] {
-        for (const auto& t : db_.accountTypeSuggestions()) types << qstr(t);
-    });
-    auto* completer = new QCompleter(types, this);
-    completer->setCaseSensitivity(Qt::CaseInsensitive);
-    completer->setFilterMode(Qt::MatchContains);
-    type_->setCompleter(completer);
-
     // ---- Account numbers (last four), newest first ----
     numbers_ = new QListWidget;
     numbers_->setObjectName("numbers");
@@ -148,56 +127,55 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
     auto* datesBox = new QVBoxLayout;
     datesBox->addWidget(datesHint);
 
+    kindForm->addRow(tr("Institution:"), institution_);
+    kindForm->addRow(tr("Display name:"), institutionDisplay_);
+
     singlePage_ = new QWidget;
     auto* form = new QFormLayout(singlePage_);
     form->setContentsMargins(0, 0, 0, 0);
-    form->addRow(tr("Institution:"), institution_);
-    form->addRow(tr("Display name:"), institutionDisplay_);
     form->addRow(tr("Account type:"), type_);
     form->addRow(tr("Account numbers:"), numbersBox);
     form->addRow(tr("Opened on:"), openedOn_);
     form->addRow(tr("Closed on:"), closedOn_);
     form->addRow(QString(), datesBox);
 
-    // ---- Combined statement: its accounts, in name order ----
-    runGuarded(this, [&] {
-        for (Account& a : db_.loadAccounts(caseId_))
-            if (!a.isCombined()) singles_.push_back(std::move(a));
-    });
-    members_ = new QListWidget;
-    members_->setObjectName("members");
-    members_->setMinimumHeight(110);
-    memberUpBtn_ = new QPushButton(tr("Move Up"));
-    memberDownBtn_ = new QPushButton(tr("Move Down"));
-    removeMemberBtn_ = new QPushButton(tr("Remove"));
-    auto* memberButtons = new QVBoxLayout;
-    memberButtons->addWidget(memberUpBtn_);
-    memberButtons->addWidget(memberDownBtn_);
-    memberButtons->addWidget(removeMemberBtn_);
-    memberButtons->addStretch();
-    auto* memberRow = new QHBoxLayout;
-    memberRow->addWidget(members_, 1);
-    memberRow->addLayout(memberButtons);
+    // ---- Combined statement: the accounts on it, typed, in name order ----
+    parts_ = new QTableWidget(0, 2);
+    parts_->setObjectName("parts");
+    parts_->setHorizontalHeaderLabels({tr("Account type (optional)"), tr("Number (last four)")});
+    parts_->horizontalHeader()->setStretchLastSection(true);
+    parts_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    parts_->verticalHeader()->hide();
+    parts_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    parts_->setSelectionMode(QAbstractItemView::SingleSelection);
+    parts_->setMinimumHeight(130);
+    auto* addPartBtn = new QPushButton(tr("Add Account"));
+    addPartBtn->setObjectName("addPart");
+    removePartBtn_ = new QPushButton(tr("Remove"));
+    removePartBtn_->setObjectName("removePart");
+    partUpBtn_ = new QPushButton(tr("Move Up"));
+    partDownBtn_ = new QPushButton(tr("Move Down"));
+    auto* partButtons = new QVBoxLayout;
+    partButtons->addWidget(addPartBtn);
+    partButtons->addWidget(partUpBtn_);
+    partButtons->addWidget(partDownBtn_);
+    partButtons->addWidget(removePartBtn_);
+    partButtons->addStretch();
+    auto* partRow = new QHBoxLayout;
+    partRow->addWidget(parts_, 1);
+    partRow->addLayout(partButtons);
+    connect(addPartBtn, &QPushButton::clicked, this, [this] { addPart(); });
 
-    memberChoice_ = new QComboBox;
-    memberChoice_->setObjectName("memberChoice");
-    addMemberBtn_ = new QPushButton(tr("Add"));
-    addMemberBtn_->setObjectName("addMember");
-    auto* addMemberRow = new QHBoxLayout;
-    addMemberRow->addWidget(memberChoice_, 1);
-    addMemberRow->addWidget(addMemberBtn_);
-
-    auto* membersHint = new QLabel(tr("The accounts on this statement, in the order they appear in the "
-                                      "name. All must be at the same institution; add each one as an "
-                                      "account first. Each shows its type as entered and current number."));
-    membersHint->setWordWrap(true);
-    membersHint->setStyleSheet("color: palette(placeholder-text);");
+    auto* partsHint = new QLabel(tr("The accounts on this statement, in the order they appear in the "
+                                    "name, e.g. Checking 1111, Savings 2222. Just type them; they don't "
+                                    "need to be saved as accounts. At least two."));
+    partsHint->setWordWrap(true);
+    partsHint->setStyleSheet("color: palette(placeholder-text);");
 
     combinedPage_ = new QGroupBox(tr("Accounts on the statement"));
     auto* combinedLayout = new QVBoxLayout(combinedPage_);
-    combinedLayout->addWidget(membersHint);
-    combinedLayout->addLayout(memberRow);
-    combinedLayout->addLayout(addMemberRow);
+    combinedLayout->addWidget(partsHint);
+    combinedLayout->addLayout(partRow);
 
     // ---- Owners ----
     owners_ = new QListWidget;
@@ -261,19 +239,16 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
 
     // ---- Fill in an existing account ----
     if (editingCombined) {
-        for (const auto id : existing_->memberIds) {
-            if (const Account* a = singleAccount(id)) {
-                auto* item = new QListWidgetItem(qstr(accountLabel(*a)), members_);
-                item->setData(kIdRole, QVariant::fromValue<qlonglong>(id));
-            }
-        }
+        for (const CombinedPart& p : existing_->parts) addPart(qstr(p.accountType), qstr(p.lastFour));
+    } else if (!existing_) {
+        addPart();
+        addPart();  // a new statement starts with two empty rows
     }
     if (existing_) {
         institution_->setText(qstr(existing_->institution));
         // Blank when it's just the institution, so editing the institution carries through.
         if (existing_->institutionDisplay != existing_->institution) {
             institutionDisplay_->setText(qstr(existing_->institutionDisplay));
-            displayEditedByUser_ = true;
         }
         type_->setText(qstr(existing_->accountType));
         openedOn_->setDate(existing_->openedOn);
@@ -292,15 +267,14 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
     numbers_->setCurrentRow(0);
     styleNumbers();
     reloadPeopleChoices();
-    reloadMemberChoices();
 
     // ---- Wiring ----
     connect(kind_, &QComboBox::currentIndexChanged, this, &AccountDialog::updateKind);
-    connect(members_, &QListWidget::currentRowChanged, this, &AccountDialog::updateState);
-    connect(addMemberBtn_, &QPushButton::clicked, this, &AccountDialog::addMember);
-    connect(removeMemberBtn_, &QPushButton::clicked, this, &AccountDialog::removeMember);
-    connect(memberUpBtn_, &QPushButton::clicked, this, [this] { moveMember(-1); });
-    connect(memberDownBtn_, &QPushButton::clicked, this, [this] { moveMember(+1); });
+    connect(parts_, &QTableWidget::currentCellChanged, this, &AccountDialog::updateState);
+    connect(parts_, &QTableWidget::itemChanged, this, &AccountDialog::updateState);
+    connect(removePartBtn_, &QPushButton::clicked, this, &AccountDialog::removePart);
+    connect(partUpBtn_, &QPushButton::clicked, this, [this] { movePart(-1); });
+    connect(partDownBtn_, &QPushButton::clicked, this, [this] { movePart(+1); });
     connect(buttons_, &QDialogButtonBox::accepted, this, &AccountDialog::accept);
     connect(buttons_, &QDialogButtonBox::rejected, this, &QDialog::reject);
     for (auto* edit : {institution_, institutionDisplay_, type_})
@@ -313,11 +287,6 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
     connect(removeNumberBtn_, &QPushButton::clicked, this, &AccountDialog::removeNumber);
     connect(numberUpBtn_, &QPushButton::clicked, this, [this] { moveNumber(-1); });
     connect(numberDownBtn_, &QPushButton::clicked, this, [this] { moveNumber(+1); });
-    connect(institution_, &QLineEdit::textChanged, this, &AccountDialog::autofillInstitutionDisplay);
-    // textEdited fires only for the user's own typing, not for autofill.
-    connect(institutionDisplay_, &QLineEdit::textEdited, this, [this](const QString& text) {
-        displayEditedByUser_ = !text.trimmed().isEmpty();
-    });
     connect(owners_, &QListWidget::currentRowChanged, this, &AccountDialog::updateState);
     connect(owners_->model(), &QAbstractItemModel::rowsMoved, this, &AccountDialog::updateState);
     connect(addOwnerBtn_, &QPushButton::clicked, this, &AccountDialog::addSelectedPerson);
@@ -348,65 +317,53 @@ void AccountDialog::updateKind()
     updateState();
 }
 
-const Account* AccountDialog::singleAccount(std::int64_t id) const
+void AccountDialog::addPart(const QString& type, const QString& number)
 {
-    for (const Account& a : singles_)
-        if (a.id == id) return &a;
-    return nullptr;
-}
-
-void AccountDialog::reloadMemberChoices()
-{
-    std::set<qlonglong> taken;
-    for (int i = 0; i < members_->count(); ++i) taken.insert(members_->item(i)->data(kIdRole).toLongLong());
-
-    // Once one account is on the statement, only its institution's accounts fit.
-    QString institution;
-    if (members_->count() > 0)
-        if (const Account* first = singleAccount(members_->item(0)->data(kIdRole).toLongLong()))
-            institution = qstr(first->institution).trimmed();
-
-    memberChoice_->clear();
-    for (const Account& a : singles_) {
-        if (taken.count(a.id)) continue;
-        if (!institution.isEmpty() && qstr(a.institution).trimmed().compare(institution, Qt::CaseInsensitive) != 0)
-            continue;
-        memberChoice_->addItem(qstr(accountLabel(a)), QVariant::fromValue<qlonglong>(a.id));
-    }
-    if (memberChoice_->count() == 0)
-        memberChoice_->setPlaceholderText(singles_.empty() ? tr("Add the accounts first (Single account)")
-                                          : institution.isEmpty()
-                                              ? tr("No accounts left")
-                                              : tr("No other %1 accounts on this case").arg(institution));
-}
-
-void AccountDialog::addMember()
-{
-    const int index = memberChoice_->currentIndex();
-    if (index < 0) return;
-    auto* item = new QListWidgetItem(memberChoice_->itemText(index), members_);
-    item->setData(kIdRole, memberChoice_->itemData(index));
-    members_->setCurrentItem(item);
-    reloadMemberChoices();
+    const QSignalBlocker block(parts_);
+    const int row = parts_->rowCount();
+    parts_->insertRow(row);
+    parts_->setItem(row, 0, new QTableWidgetItem(type));
+    parts_->setItem(row, 1, new QTableWidgetItem(number));
+    parts_->setCurrentCell(row, 0);
+    if (isVisible()) parts_->editItem(parts_->item(row, 0));
     updateState();
 }
 
-void AccountDialog::removeMember()
+void AccountDialog::removePart()
 {
-    delete members_->takeItem(members_->currentRow());
-    reloadMemberChoices();
+    const int row = parts_->currentRow();
+    if (row < 0) return;
+    parts_->removeRow(row);
     updateState();
 }
 
-void AccountDialog::moveMember(int delta)
+void AccountDialog::movePart(int delta)
 {
-    const int row = members_->currentRow();
+    const int row = parts_->currentRow();
     const int target = row + delta;
-    if (row < 0 || target < 0 || target >= members_->count()) return;
-    QListWidgetItem* item = members_->takeItem(row);
-    members_->insertItem(target, item);
-    members_->setCurrentRow(target);
+    if (row < 0 || target < 0 || target >= parts_->rowCount()) return;
+    const QSignalBlocker block(parts_);
+    for (int col = 0; col < 2; ++col) {
+        QTableWidgetItem* a = parts_->takeItem(row, col);
+        QTableWidgetItem* b = parts_->takeItem(target, col);
+        parts_->setItem(row, col, b);
+        parts_->setItem(target, col, a);
+    }
+    parts_->setCurrentCell(target, parts_->currentColumn() < 0 ? 0 : parts_->currentColumn());
     updateState();
+}
+
+std::vector<CombinedPart> AccountDialog::parts() const
+{
+    // Rows left completely blank are ignored.
+    std::vector<CombinedPart> out;
+    for (int row = 0; row < parts_->rowCount(); ++row) {
+        const QString type = parts_->item(row, 0) ? parts_->item(row, 0)->text().trimmed() : QString();
+        const QString number = parts_->item(row, 1) ? parts_->item(row, 1)->text().trimmed() : QString();
+        if (type.isEmpty() && number.isEmpty()) continue;
+        out.push_back({stdstr(type), stdstr(number)});
+    }
+    return out;
 }
 
 void AccountDialog::reloadPeopleChoices()
@@ -475,33 +432,17 @@ void AccountDialog::moveOwner(int delta)
     updateState();
 }
 
-void AccountDialog::autofillInstitutionDisplay()
-{
-    if (displayEditedByUser_) return;
-    // Known institution -> its usual abbreviation; anything else -> blank (= full name).
-    institutionDisplay_->setText(
-        knownDisplayNames_.value(institution_->text().trimmed().toLower()));
-}
-
 Account AccountDialog::currentAccount() const
 {
     Account a;
     for (int i = 0; i < owners_->count(); ++i)
         a.owners.push_back(stdstr(owners_->item(i)->data(kDisplayRole).toString()));
-    if (isCombined()) {
-        for (int i = 0; i < members_->count(); ++i) {
-            const Account* m = singleAccount(members_->item(i)->data(kIdRole).toLongLong());
-            if (!m) continue;
-            if (a.combined.empty()) {
-                a.institution = m->institution;
-                a.institutionDisplay = m->institutionDisplay;
-            }
-            a.combined.push_back({m->id, m->accountType, m->lastFour});
-        }
-        return a;
-    }
     a.institution = stdstr(institution_->text());
     a.institutionDisplay = stdstr(institutionDisplay_->text().trimmed());
+    if (isCombined()) {
+        a.combined = parts();
+        return a;
+    }
     a.accountType = stdstr(type_->text());
     const auto all = numbers();
     if (!all.empty()) {
@@ -590,11 +531,10 @@ void AccountDialog::updateState()
     numberDownBtn_->setEnabled(numberRow >= 0 && numberRow < numbers_->count() - 1);
     removeNumberBtn_->setEnabled(numberRow >= 0 && numbers_->count() > 1);
 
-    const int memberRow = members_->currentRow();
-    memberUpBtn_->setEnabled(memberRow > 0);
-    memberDownBtn_->setEnabled(memberRow >= 0 && memberRow < members_->count() - 1);
-    removeMemberBtn_->setEnabled(memberRow >= 0);
-    addMemberBtn_->setEnabled(memberChoice_->count() > 0);
+    const int partRow = parts_->currentRow();
+    partUpBtn_->setEnabled(partRow > 0);
+    partDownBtn_->setEnabled(partRow >= 0 && partRow < parts_->rowCount() - 1);
+    removePartBtn_->setEnabled(partRow >= 0);
 
     const Account a = currentAccount();
     const bool valid = !validateAccount(a);
@@ -616,7 +556,7 @@ void AccountDialog::updateState()
         preview_->setText(text);
     } else {
         preview_->setTextFormat(Qt::RichText);
-        preview_->setText(isCombined() ? tr("<i>Add at least two accounts from the same institution.</i>")
+        preview_->setText(isCombined() ? tr("<i>Fill in the institution and at least two accounts, each with a number.</i>")
                                        : tr("<i>Fill in the institution and an account number (the type is optional).</i>"));
     }
 }
@@ -628,10 +568,7 @@ void AccountDialog::accept()
     r.caseId = caseId_;
     for (int i = 0; i < owners_->count(); ++i)
         r.ownerIds.push_back(owners_->item(i)->data(kIdRole).toLongLong());
-    if (isCombined()) {
-        for (int i = 0; i < members_->count(); ++i)
-            r.memberIds.push_back(members_->item(i)->data(kIdRole).toLongLong());
-    }
+    if (isCombined()) r.parts = parts();
     r.institution = stdstr(institution_->text());
     r.institutionDisplay = stdstr(institutionDisplay_->text());
     r.accountType = stdstr(type_->text());

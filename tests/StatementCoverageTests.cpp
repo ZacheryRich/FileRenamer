@@ -139,8 +139,9 @@ TEST_CASE("A combined statement counts for every account on it")
     const auto savings = c.db.createAccount({0, c.caseId, "Chase", "", "Savings", "2222", {c.husband}});
     AccountRecord combined;
     combined.caseId = c.caseId;
+    combined.institution = "chase";  // typed, any case
     combined.ownerIds = {c.husband};
-    combined.memberIds = {c.checking, savings};
+    combined.parts = {{"Checking", "1234"}, {"Savings", "2222"}};
     c.db.createAccount(combined);
 
     c.dir.touch("2024.05.31 Chase Checking x1234, Savings x2222 (H).pdf");
@@ -419,7 +420,7 @@ TEST_CASE("A loosely named combined statement needs the institution and all its 
 {
     Coverage c;
     const auto savings = c.db.createAccount({0, c.caseId, "Chase", "", "Savings", "2222", {c.husband}});
-    AccountRecord both{0, c.caseId, "Chase", "", "", "", {c.husband}, {}, {c.checking, savings}};
+    AccountRecord both{0, c.caseId, "Chase", "", "", "", {c.husband}, {}, {{"Checking", "1234"}, {"Savings", "2222"}}};
     c.db.createAccount(both);
     c.dir.touch("Chase combined 1234 2222 2023-05.pdf");   // both numbers: the combined statement
     c.dir.touch("Chase Savings 2222 2023-06.pdf");         // one account only
@@ -460,4 +461,62 @@ TEST_CASE("A statement dated with just a year and month counts for that month")
     const auto scan = c.scan();
     CHECK(c.monthsOf(scan, c.checking) == std::set<Month>{ym(2022, 3)});
     CHECK(scan.unmatched.empty());
+}
+
+TEST_CASE("Names with extra words are possible matches, not credited until the user says so")
+{
+    Coverage c;
+    c.dir.touch("2023.05.31 Email from Chase to John (Re acct x1234).pdf");
+    c.dir.touch("Ltr from Chase 1234 2023-06.pdf");
+    c.dir.touch("2023.07.31 Court Order (Chase 1234 subpoena).pdf");
+    c.dir.touch("Chase Checking 1234 January 2023 draft.pdf");   // one extra word: still a statement
+    c.dir.touch("2023.09.30 Chase Checking x1234 (H).pdf");      // the program's own format
+
+    const auto scan = c.scan();
+    CHECK(scan.pdfCount == 5);
+    CHECK(scan.possible.size() == 3);
+    CHECK(scan.matchedCount == 2);
+    CHECK(scan.unmatched.empty());
+    CHECK(c.monthsOf(scan, c.checking) == std::set<Month>{ym(2023, 1), ym(2023, 9)});
+
+    const auto accounts = c.db.loadAccounts(c.caseId);
+    const auto none = applyPossibleMatches(scan, accounts, {false, false, false});
+    CHECK(c.monthsOf(none, c.checking) == c.monthsOf(scan, c.checking));
+
+    std::vector<bool> pick(scan.possible.size(), false);
+    pick[0] = true;
+    const auto some = applyPossibleMatches(scan, accounts, pick);
+    CHECK(some.matchedCount == 3);
+    CHECK(some.loose.size() == scan.loose.size() + 1);
+    CHECK(c.monthsOf(some, c.checking).size() == 3);
+    CHECK(c.monthsOf(scan, c.checking).size() == 2);  // the scan itself is untouched
+}
+
+TEST_CASE("Months resting only on loosely named files are starred in the report")
+{
+    Coverage c;
+    c.dir.touch("2023.01.31 Chase Checking x1234 (H).pdf");
+    c.dir.touch("2023.01.31 Chase Checking x1234 (H) (2).pdf");
+    c.dir.touch("Chase Checking 1234 March 2023.pdf");
+    c.dir.touch("Chase Checking 1234 January 2023.pdf");   // January is also sure
+    const auto scan = c.scan();
+    const auto accounts = c.db.loadAccounts(c.caseId);
+    const std::vector<Account> checking{accounts[0]};
+
+    const auto coverage = analyzeCoverage(checking, scan, ym(2023, 1), ym(2023, 3));
+    REQUIRE(coverage.size() == 1);
+    CHECK(coverage[0].years[0].looseOnly == std::vector<unsigned>{3});
+
+    ReportSettings settings;
+    settings.from = ym(2023, 1);
+    settings.to = ym(2023, 3);
+    const auto report = buildDeficiencyReport("Smith", coverage, settings);
+    CHECK(report.tables[0].rows[0].found == "Jan, Mar*");
+    CHECK_FALSE(report.footnote.empty());
+    const auto zip = readZip(docxBytes(report));
+    CHECK(zip.at("word/document.xml").data.find("verify these months") != std::string::npos);
+
+    // Nothing starred, no footnote.
+    const auto plain = analyzeCoverage(checking, scan, ym(2023, 1), ym(2023, 1));
+    CHECK(buildDeficiencyReport("Smith", plain, settings).footnote.empty());
 }

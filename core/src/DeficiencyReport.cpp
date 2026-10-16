@@ -1,5 +1,7 @@
 #include "finrenamer/DeficiencyReport.h"
 
+#include <algorithm>
+
 namespace chr = std::chrono;
 
 namespace finrenamer {
@@ -65,6 +67,7 @@ DeficiencyReport buildDeficiencyReport(const std::string& caseName,
     report.showFound = settings.showFound || !settings.showMissing;
     report.showMissing = settings.showMissing;
 
+    bool starred = false;
     for (const AccountCoverage& account : coverage) {
         ReportTable table;
         table.heading = account.label;
@@ -79,11 +82,27 @@ DeficiencyReport buildDeficiencyReport(const std::string& caseName,
             ReportRow row;
             row.year = std::to_string(year.year) + (year.notOpen ? " (not open)" : "");
             row.found = valueText(year.found, year.notOpen);
+            if (!year.looseOnly.empty()) {
+                // Months that rest only on files not named by this program get a star.
+                std::vector<unsigned> sure;
+                for (const unsigned m : year.found)
+                    if (std::find(year.looseOnly.begin(), year.looseOnly.end(), m) == year.looseOnly.end())
+                        sure.push_back(m);
+                std::string text = monthListText(sure);
+                for (const unsigned m : year.looseOnly) {
+                    if (!text.empty()) text += ", ";
+                    text += std::string(kMonthAbbreviations[m - 1]) + '*';
+                }
+                row.found = text;
+                starred = true;
+            }
             row.missing = valueText(year.missing, year.notOpen);
             table.rows.push_back(std::move(row));
         }
         report.tables.push_back(std::move(table));
     }
+    if (starred)
+        report.footnote = "* Counted from a file whose name is not in this program's format; verify these months.";
     return report;
 }
 

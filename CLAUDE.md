@@ -18,13 +18,13 @@ Everything is local: no network, data stored on the user's own machine.
 
 Workflow: create a **case** (client) → it has **people** and **accounts** →
 open the **rename screen**, pick a folder of PDFs → for each file choose what it is
-(a statement for an account, an email, text, letter or other file) and a date (or skip it) → preview → **Apply** renames (and optionally
+(a statement for an account, a file named from one of the user's own templates, or an Other file) and a date (or skip it) → preview → **Apply** renames (and optionally
 sorts into subfolders) → **Undo** if needed.
 
 ## The user and environment
 
 - Intermediate C++ developer; comfortable with CMake and libraries.
-- Windows, **Visual Studio 2022** (MSVC 19.44), CMake 3.31 bundled with VS.
+- Windows, **Visual Studio 2022** (MSVC 19.44), CMake 3.31 bundled with VS (the project needs 3.28+).
 - **Qt 6.12.0** at `C:\Qt\6.12.0\msvc2022_64`, with the **Qt PDF** add-on.
 - **Inno Setup 6** for the installer.
 - The project was developed with Claude in a Linux sandbox (GCC 13, Qt 6.12
@@ -53,12 +53,15 @@ sorts into subfolders) → **Undo** if needed.
     does *not* read a bare year (too ambiguous).
 - **Institution** uses the account's *institution display name* if set
   (e.g. "Bank of America" → `BofA`), else the full institution name.
-- **Account type** is free text, autocompleted from types used before. **Optional**
+- **Account type** is free text (no autocomplete). **Optional**
   (user: leave it blank if unknown): a blank type just drops out of the label --
   `2026.01.31 Chase x1234 (H).pdf`; on a combined statement `Chase x1111, Sav x2222`.
   Only the institution and a last-four number are required (`validateAccount`).
 - **Owners**: each person's *display name* (e.g. `H`, `W`, `J`), in the account's
   owner order, joined with `"; "` → `(H; W)`. No owners → no parentheses.
+- Reserved Windows names (CON, PRN, AUX, NUL, COM1-9, LPT1-9, with any extension) can only occur in
+  no-date names; `buildPlan` marks them Error (`isReservedWindowsName`). Path length >260 was
+  already an Error (`PlanOptions::maxPathLength`).
 - Windows-illegal characters are cleaned: `/ \ : |` → `-`; `< > " ? *` removed;
   whitespace collapsed; trailing dots/spaces trimmed.
 - Example: `2026.01.31 BofA Checking x1234 (J).pdf`
@@ -85,49 +88,87 @@ sorts into subfolders) → **Undo** if needed.
   itself**, its own account folder named like the file label, and combined
   statements are **saved in the case** (account dialog's "Statement" dropdown:
   Single account / Combined statement; fixed once saved) and picked from the
-  rename screen's account list like any account. Stored as an `accounts` row with
-  `is_combined = 1` plus `combined_members` (order); `Account::combined` /
-  `AccountRecord::memberIds`. At least two accounts, same institution (any case),
-  same case, no nesting; an account on a statement can't be deleted. The Number
-  dropdown doesn't apply (each account's *current* number is used -- known gap:
-  older combined statements from before a card replacement get the new number).
-  Editing a member account records the statement's old names too
-  (`recordMemberChange`); a member that only got a newer number records just the
-  folder name, as for single accounts.
+  rename screen's account list like any account. **A combined statement is typed, not built
+  from existing accounts** (user's request): the dialog takes **one institution (plus display name)
+  and a table of account types and numbers** (type optional, number required, at least two,
+  Add Account / Move Up / Move Down / Remove; blank rows ignored; no duplicate type+number). Stored
+  as an `accounts` row with `is_combined = 1`, its own institution columns, plus `combined_parts`
+  (position, type, last four; schema v7 -- the v7 migration copied the old linked members' types and
+  numbers into it and dropped `combined_members`); `Account::combined` /
+  `AccountRecord::parts` (`CombinedPart{accountType, lastFour}`). Single accounts and statements
+  are independent: deleting/editing an account never touches a statement. The Number dropdown
+  doesn't apply. The Deficiency List credits a statement to every *single* account of the case at
+  the same institution (full or display name, any case) whose current or older number appears on
+  it (`accountsOnStatement` in `StatementCoverage.cpp`); parts with no matching saved account
+  credit nothing. Editing a statement records its old names (as for single accounts).
 
 ## File types on the rename screen (decided with the user)
 
 The rename screen's **Type** dropdown: **Statement** (the account-based name above, the
-default), **Email**, **Text**, **Letter**, **Other**. Every name starts with the date in the
-same `YYYY.MM.DD` format; everything after it is typed by the user (free-text boxes, cleaned
-with `sanitizeComponent`), except the fixed words shown. The description is **always
-optional** and its parentheses drop out when blank; every other box below is required.
+default), then **the user's own templates** (alphabetical), then **Other**. Email, Text and Letter
+are no longer hardcoded (user's request): they are templates the user defines (the Templates
+window's **Add Examples** button creates Email, Text, Text Conversation, Group Text and Letter
+for them). Every name starts with the date in the same `YYYY.MM.DD` format; everything after it
+is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a pattern.
 
-| Type | Name | Dates offered |
-|---|---|---|
-| Email | `2026.01.31 Email from [Sender] to [Recipient] ([Description]).pdf` | single date |
-| Text, one message | `[Date] [Label] from [Sender] to [Recipient] ([Description])` | single date |
-| Text, conversation | `[Date] [Label] between [Person] and [Person] ([Description])` | single or period |
-| Text, group chat | `[Date] [Label] with [People or group name] ([Description])` | single or period |
-| Letter | `[Date] [Label] from [Sender] ([Description])` -- no recipient box | single date |
-| Other | `[Date] [Label] ([Description])` -- no people boxes | single or period |
-
-- The **label** is a text box, not a fixed word, so the user can type `WhatsApp`, `Our Family
-  Wizard`, `Court Order`... It is pre-filled with **`Texts`** for Text and **`Ltr`** for Letter
-  (replaced by the other kind's default if the user hasn't typed their own); blank for Other
-  and **required** there. Emails always say `Email`.
+- **Template** = name + **pattern** + "allow a period" flag (`DocumentTemplate`; stored in the
+  database, table `document_templates`, schema v8, shared by all cases). Pattern syntax (the
+  date is never written in it; always added in front):
+  `Email from {Sender} to {Recipient}[ ({Description})]`
+  - `{Name}` = a text box captioned Name (required unless inside [ ]); the same name twice
+    (ignoring case) is one box;
+  - `[ ... ]` = optional part: left out, fixed words included, when all its boxes are blank; if
+    only some of its boxes are filled the others become required; no nesting;
+  - `\[ \] \{ \} \\` = literal characters; everything else is fixed text.
+  - **"Start the name with a date" checkbox** (template editor, objectName "useDate", default on;
+    `DocumentTemplate::useDate`, column `use_date`, schema v9): off = no date box on the rename
+    screen and no date in the name (`Photo of the car.pdf`); the "allow a period" box is then
+    disabled. A template that can print nothing (all parts optional, none filled) is flagged
+    "Needs a name". `documentUsesDate(info)` is the one place that decides.
+  - Template names are unique ignoring case and can't be "Statement" or "Other".
+    `validatePattern` / `validateTemplate` give user-facing error messages (Database throws
+    `DatabaseError` with them). Dates: single date always, a period only if "allow a period" is
+    ticked; **quarters are statements only**; month/day stay optional (see Date modes).
+  - Boxes on the screen are built from the pattern (`RenameWindow::syncFieldEdits`; objectNames
+    `field_<name with spaces as _, lower case>`, e.g. "field_sender"). Choosing a template puts the
+    cursor in its first box. Boxes are **kept (not rebuilt) when the next file uses the same
+    template**, so the cursor stays put on Next File. Text typed is stored per field name in the
+    row (`DocumentInfo::fields`, key `fieldKey`), so switching template keeps what has the same
+    box name. **No autocomplete anywhere** (user's decision, privacy: nothing typed is
+    remembered; `main.cpp` deletes the old `templateValues` section of settings.ini at startup).
+  - **Templates... button** (objectName "templates") beside the Type dropdown opens
+    `TemplatesDialog` (table "templates"; buttons addTemplate, editTemplate, duplicateTemplate,
+    deleteTemplate, addExamples, close; editor fields "templateName", "templatePattern",
+    "allowPeriod" with a live example and error text). Changes save at once. Rows on screen that
+    aren't renamed yet are updated (`RenameSession::refreshTemplates`): an edited template applies
+    to them keeping typed text; a deleted one turns the row into an **Other** with the name it had
+    (or back to a blank statement row if nothing was typed).
+  - **Export... / Import...** in the Templates window (objectNames "exportTemplates", "importTemplates"):
+    all templates as one XML file (`templatesToXml` / `templatesFromXml`, pugixml; root
+    `fileNameTemplates`, no ids). Import validates each template, skips bad ones with a reason,
+    skips identical ones, adds new ones, and asks Replace Mine / Keep Mine / Cancel for same-name
+    templates whose pattern differs. Folder remembered as `templates/lastDir`.
+  - A row stores a **copy** of its template (`DocumentInfo::tmpl`), so core needs no database.
+- **Other** (kept for one-off files): `[Date] [Label] ([Description])`; the label is required,
+  the description optional (its parentheses drop out when blank); single date or period. The date
+  is **optional per file**: the "Start the name with a date" checkbox (objectName "includeDate",
+  checked by default, `DocumentInfo::noDate`) turns it off for that file (name = `Label (Description)`);
+  carry-forward copies the setting.
 - Quarters are for statements only; **month and day are optional for every kind** (see Date modes). Dates beyond what a kind offers are rejected (`validateDocumentDate`).
-- **Folder sorting is for statements only** (user's rule): emails, texts, letters and other files
+- **Folder sorting is for statements only** (user's rule): template and Other files
   get neither account nor year folders -- they are renamed where they are (`buildPlan` uses the
   source folder for them). Their "Into folder" cell reads grey "(stays here)".
-- **Carry-forward** after a non-statement copies the kind, label, people and the **same date**
-  (not a month later), and leaves the description blank.
-- Missing fields show in the Status column, e.g. "Needs sender, recipient and a date"
+- **Carry-forward** after a non-statement copies the kind, template, typed text and the **same date**
+  (not a month later), and blanks the **optional** boxes (for Other: the description)
+  (`clearOptionalFields`).
+- Missing fields show in the Status column, e.g. "Needs sender and recipient" / "Needs sender and a date"
   (`documentMissing`, delivered through `PlannedMove::message` on `Incomplete`).
-- Code: `core/DocumentName` (`DocKind`, `TextStyle`, `DocumentInfo`, `buildDocumentFilename`);
+- Code: `core/DocumentName` (`DocKind{Statement,Template,Other}`, `DocumentTemplate`, `DocumentInfo`,
+  `templateFields`, `sampleLabel`, `exampleTemplates`, `buildDocumentFilename`);
   `PlanInput::document` and `SessionRow::document` (kind `Statement` = use the account).
-  Nothing about these is stored in the database. Not yet covered: the Deficiency List and
-  Update File Names only know statements, so these files show up under "Files Not Matched".
+  Only the templates are stored in the database; what was typed per file is not.
+  Not yet covered: the Deficiency List and Update File Names only know statements, so these
+  files show up under "Files Not Matched".
 
 ## Subfolder sorting
 
@@ -150,8 +191,8 @@ optional** and its parentheses drop out when blank; every other box below is req
   they're ordinary people (rename/delete freely).
 - People have a **full name** and a **display name** (blank = full name). Both
   unique per case, case-insensitively, so two people can't produce the same filename.
-- Institution display names are remembered: typing a known institution autofills
-  its last-used abbreviation (any case); the user's own typing is never overwritten.
+- Institution display names are typed by hand (the old autofill/autocomplete was removed on
+  purpose; don't bring back remembered suggestions).
 - **Skip**: a per-file option to leave a file as is. Skipped files are *not*
   remembered between sessions (user wants to re-check them on a second pass).
 - **Partial apply** is allowed: rows not filled in are left alone; applied rows
@@ -159,7 +200,9 @@ optional** and its parentheses drop out when blank; every other box below is req
 - **Carry-forward**: pressing Enter / Next File copies the account and the *next*
   date to the next file if it's blank (month-ends stay month-ends; periods shift by
   their own length; quarters roll over). Deliberately **not** on mouse clicks, so
-  browsing never silently fills rows.
+  browsing never silently fills rows. **Focus stays in the field it was in** (e.g. Description)
+  when moving to the next file, if that field is still enabled/visible there (`goToNext`);
+  otherwise focus goes to the date (after a carry) or the account.
 - **Refresh button** (not automatic) to pick up PDFs added to the folder; new
   files are appended at the end, entries are kept.
 - Name collisions: default **append " (2)"**; option to block instead. Never overwrite.
@@ -227,6 +270,19 @@ optional** and its parentheses drop out when blank; every other box below is req
   needs the institution and all its numbers. **Never guesses**: a tie between two
   accounts, or a number alone, stays unmatched. Loose matches are counted, listed under
   "Other Name Styles..." (`CoverageScan::loose`) and mentioned in the summary.
+  **Possible matches** (user's request; stops emails/letters/orders that mention an account from
+  filling a missing month): a loose match counts only if the name has at most one word the match
+  doesn't explain (`LooseNameMatcher::Match::extraWords`, `kMaxExtraWords = 1`; explained = date,
+  institution, type, number, owners, filler like "statement", 1-2 digit copy numbers). Others go to
+  `CoverageScan::possible` and are NOT credited by `scanStatements`; `applyPossibleMatches(scan,
+  allAccounts, included)` returns the scan with the ticked ones credited. `DeficiencyDialog` keeps
+  `scan_` (folders as they are) and `effective_` (after the ticks); after a scan, files without a
+  remembered answer open `PossibleMatchesDialog` (check boxes, Check All/Uncheck All; start ticked;
+  Cancel = not counted, not remembered); answers are remembered per case
+  (`deficiency/case<id>/possible`, matched by `caseFoldKey`); "Possible Matches..." (objectName
+  "possible") reopens it. The preview stays live. Months backed only by loosely named files
+  (`strictCovered` vs `looseCovered`, `YearCoverage::looseOnly`) get a `*` in Months Found, with
+  `DeficiencyReport::footnote` on screen and in the Word file.
   Known limit: an abbreviation the account doesn't use (e.g. "WF" for "Wells Fargo")
   still needs the type, or the file stays under "Files Not Matched...".
   A single date covers its calendar month, a period every month it touches, a
@@ -264,6 +320,105 @@ optional** and its parentheses drop out when blank; every other box below is req
   has no folder). Numbers are written as text. Needs the workbook closed in Excel.
   Paths remembered in settings.ini under `bates/workbook|folder|log`.
 
+- **Vacation Letters** (start-screen tile; `VacationDialog`; no case needed): the firm's list of
+  cases lives in an Excel workbook on a shared drive (Dropbox) and the letter is a Word mail-merge
+  template (`Vacation_Letter_v_<date>.docx`) in the same shared place -- **both stay where they
+  are and are read fresh each time** (user: others use them without this program; the program
+  never copies or replaces the template). Decided with the user: **only the "ALL CASES..." tab
+  matters** (the attorney tabs are an old method; the loader takes the sheet whose name starts
+  with "ALL CASES", else the first); drafts go into **one combined .docx** saved wherever the
+  user picks (standard Save dialog; default `Vacation Letters yyyy.MM.dd.docx`; folder
+  remembered); cases chosen by **tick boxes in a list filtered by attorney / paralegal / county /
+  text**; **"(HOLD)" and "eFile only" cases are treated like any other** (the cell text prints
+  as is -- user's answer; don't add special handling unasked).
+  - Edit form: one box per sheet column; **Save writes only the changed cells of that one row**
+    back into the .xlsx (`saveVacationRow`), patching the sheet XML with pugixml and re-zipping:
+    other tabs, the table, styles, conditional formats, column widths are carried over untouched
+    (OpenXLSX's load/save round trip is deliberately not used for this). New text is written as
+    inline strings. New case = first free row below the last (a pre-formatted blank row is
+    reused; the table's `ref`/autoFilter and the sheet's dimension grow if needed). Written to
+    `<name>.xlsx.saving` then renamed over the original, so a failed save (file open in Excel)
+    never damages the shared workbook.
+  - **Conflict safety** (it's a shared file): a save passes what the row held when loaded
+    (`expected`); if the workbook's row differs now -> `SheetConflict`, nothing written. Ticked
+    cases are remembered with their values; **Reload / Create Letters untick any whose row
+    changed** and refuse to create until the user re-checks. Reload leaves a form with unsaved
+    typing alone (Revert loads the fresh values).
+  - Letters (`VacationLetters.cpp`): the template's merge fields (`MERGEFIELD name`, matched to
+    columns by `normalizeHeader`: lower-case letters+digits only, so `Client_CoCounsel` =
+    " Client (Co-Counsel)" and `OPC_2_Address` = "OPC 2 Address" = "OC 2 Address") are replaced
+    at the XML level by a plain run copying the placeholder's formatting; a cell's line breaks
+    become `<w:br/>`. The **DATE field is kept** (shows today's date until Word refreshes it).
+    Letters are repeated in one body, each after the first starting with `pageBreakBefore`
+    (no spacer paragraph); header/footer/letterhead come from the template's single section.
+    The template's `mailMerge` settings block, its `settings.xml.rels` and `recipientData.xml`
+    (the link to the user's local Dropbox path) are dropped from the output so Word doesn't
+    ask about a data source. A merge field with no matching column is left blank and listed.
+  - Known template typos (user's to fix in the shared template, not ours): "202" for 2026 in
+    Michael Burnett's first date range; some attorney labels have a colon, some don't.
+  - Needs pugixml directly (`pugixml::pugixml`, found via OpenXLSX's copy or vcpkg).
+  - Settings: `vacation/workbook|template|saveFolder`. objectNames: "workbook", "template",
+    "browseWorkbook", "browseTemplate", "reload", "search", "attorney", "paralegal", "county",
+    "cases" (checkbox column 0, sheet row in `Qt::UserRole`), "selectShown", "clearSelection",
+    "selectedCount", "form", "field_<normalized column>" (e.g. "field_county"), "newCase",
+    "revert", "saveCase", "status", "createLetters", "close".
+  - **Signatures** ("Signatures..." button, objectName "signatures", next to the template row;
+    `SignaturesDialog`): a list of attorney -> signature picture (PNG/JPEG), add/change/remove as
+    attorneys join or leave, saved at once in settings.ini under `vacation/signatures` (array of
+    `attorney`, `file`; folder memory `vacation/signatureFolder`). Pictures are used from where
+    they are saved, not copied. The signer of a letter is its "Partner on case" value (fallback
+    "Attorney"); matching uses `normalizeHeader` (case/punctuation ignored). The **template needs a
+    `Signature` merge field** (a MERGEFIELD named Signature, in its own paragraph above the signer's
+    name); `fillBody` replaces it with an inline picture (`wp:inline`, media `word/media/signatureN.ext`,
+    rels `rIdSignatureN`), or nothing if the signer has no picture. Create Letters reports signatures
+    added, signers with no picture, and a template with no Signature field. objectNames in the dialog:
+    "signers", "addSigner", "editSigner", "removeSigner", "close".
+  - Not built: deleting a case (do it in Excel), editing other tabs, one-file-per-case output.
+
+- **PDF Unlocker** (start-screen tile "pdfUnlocker"; `UnlockDialog`; no case needed): like SysTools'
+  PDF Unlocker. Makes **unprotected copies**: removes owner restrictions (printing, copying,
+  editing, commenting, form filling, page assembly -- no password needed) and, for PDFs that ask
+  for a password to open, uses a password **the user supplies** (per file in the Password column,
+  double-click; or one password for the whole list via "Try on Password-Protected PDFs"). It
+  **never guesses or cracks passwords** (decided: not building that). Decided with the user: copies
+  go to **a folder the user chooses** (required; remembered in `unlock/outputFolder`), **originals
+  are never touched and nothing is overwritten** (name taken -> " (2)", `unlockedCopyPath`),
+  input is **files or whole folders** (Add Files / Add Folder + "Include subfolders" remembered as
+  `unlock/subfolders`, drag-and-drop onto the window). A PDF that isn't protected is skipped (no
+  copy); unreadable ones are listed, not crashed on; every row shows Status (inspect result),
+  Password, Result. A second "Unlock PDFs" doesn't redo finished rows ("Already unlocked.").
+  - Core `PdfUnlock` (`inspectPdf`, `unlockPdf`, `unlockedCopyPath`) is a thin layer over **qpdf**
+    (`QPDFWriter::setPreserveEncryption(false)`; writes `<dest>.unlocking` then renames; refuses
+    dest == source and existing dest). Handles RC4 40/128, AES-128, AES-256 (R2-R6); tests build
+    each kind with qpdf itself.
+  - **Building qpdf** (`core/CMakeLists.txt`): an installed qpdf (vcpkg) is used if found, else
+    qpdf 12.2.0, zlib 1.3.1 and libjpeg-turbo 3.0.4 are fetched and built static (own "native"
+    crypto, no DLLs, nothing to install on Windows). qpdf only finds zlib/libjpeg through
+    `find_path`/`find_library`, so those cache variables are pre-answered with our targets
+    (`zlibstatic`, `jpeg-static`) and headers staged in `build/qpdf-deps/include`.
+    libjpeg-turbo refuses `add_subdirectory`, so `cmake/patch_libjpeg_turbo.cmake` switches off
+    that one check (FetchContent PATCH_COMMAND). qpdf registers perl-based self-tests with
+    `add_test`; a wrapper `add_test` function drops them so `ctest`/Test Explorer stay clean.
+    `FINRENAMER_QPDF_TARGET` (cache INTERNAL) is what tests link. Verified on Linux/GCC only;
+    **the first MSVC build of qpdf/libjpeg-turbo/zlib is the user's** (first configure downloads
+    them; first build takes a few extra minutes). If it fails on MSVC, ask for the Output window.
+  - objectNames: "files" (columns File, Folder, Status, Password, Result), "addFiles", "addFolder",
+    "includeSubfolders", "removeSelected", "clearList", "batchPassword", "applyPassword",
+    "outputFolder", "browseOutput", "unlock", "openOutput", "summary", "close".
+  - Licence notices: see **Third-party notices** below.
+
+## Third-party notices
+
+`THIRD-PARTY-NOTICES.txt` (repo root) holds the required notices and full licence texts for
+qpdf (Apache-2.0 + NOTICE), libjpeg-turbo (IJG + BSD, with the "based in part on the work of the
+Independent JPEG Group" line), zlib, SQLite, SQLiteCpp, OpenXLSX, pugixml, miniz, Nowide, Qt (LGPL-3.0,
+dynamically linked) with Qt's bundled components and Qt PDF's, and the MSVC runtime. It is
+compiled into the app (`app/CMakeLists.txt` resource; `NoticesDialog`, start-screen button
+"licences") and installed to the install root (the installer copies all of dist). It was
+generated from the real licence files by a script (not in the repo): **when a dependency or
+its version changes, regenerate/edit it by hand.** Unverified: Nowide's copyright line, and Qt's
+component list comes from the Linux Qt 6.12.0 build's SBOM, not the user's Windows install.
+
 ## Layout of the code
 
     CMakeLists.txt          options FINRENAMER_BUILD_APP / FINRENAMER_BUILD_TESTS
@@ -273,7 +428,7 @@ optional** and its parentheses drop out when blank; every other box below is req
       DateSpec              variant<SingleDate, Period, Quarter, WholeYear, YearMonth>; format, validate,
                             filingYear, nextDateSpec (carry-forward), parseUserDate
       FilenameBuilder       sanitizeComponent, accountLabel, buildFilename, validateAccount
-      DocumentName          DocKind/TextStyle/DocumentInfo; names for email, text, letter, other files
+      DocumentName          DocKind/DocumentTemplate/DocumentInfo: user-defined name patterns (parse, fields, names, missing text) and Other files
       FolderPlanner         subfolderFor(account, date, SortOptions) -- statements only; documents get no subfolder
       FileScanner           listPdfFiles (top level, case-insensitive .pdf, sorted)
       NameFixer             planNameFixes(roots, accounts, oldNames, options): in-place renames
@@ -290,6 +445,9 @@ optional** and its parentheses drop out when blank; every other box below is req
       DirectoryListing      listDirectoryTree (folders + files, sample order), isIgnoredFileName
       BatesLog              parseBatesLog / matchKey: Acrobat's Bates log reader
       BatesSheet            writeListing, applyBatesLog: the .xlsx layout, via OpenXLSX
+      VacationSheet         load the ALL CASES sheet; saveVacationRow patches one row (pugixml + zip), conflict check
+      VacationLetters       letterValues, templateMergeFields, writeCombinedLetters (fills the Word template)
+      PdfUnlock             inspectPdf / unlockPdf / unlockedCopyPath: remove PDF restrictions/passwords (qpdf)
       Database              SQLite via SQLiteCpp (pimpl; not exposed in headers)
       Utf8Path              pathFromUtf8 / utf8FromPath / utf16Length / caseFoldKey
     app/                    Qt Widgets GUI (static lib finrenamer_ui + FinRenamer.exe)
@@ -299,6 +457,7 @@ optional** and its parentheses drop out when blank; every other box below is req
       CasePickerDialog      "Choose a Case" (filter list; remembers home/lastCase; "New Case..." button "newCase" creates + selects + continues; opens straight into it when there are no cases) for the last two tiles
       MainWindow            the Case List: cases list | people table + accounts table; File menu
       CaseDialog, PersonDialog, AccountDialog
+      TemplatesDialog       Templates...: add/edit/duplicate/delete file name templates (rename screen's Type list)
       RenameWindow          the rename screen (table + editor left, preview right)
       DateWidgets           DateField (Year/Month/Day boxes + calendar), DateSpecEditor (mode + inputs; setModes limits the modes)
       PdfPreview            QPdfView preview; compiled only with FINRENAMER_HAVE_QTPDF
@@ -306,15 +465,18 @@ optional** and its parentheses drop out when blank; every other box below is req
       CaseFolderList        shared per-case folder list (Add/Remove/drag; settings key updateNames/case<id>/folders)
       UpdateNamesDialog     Update File Names: folder list, preview, apply
       DeficiencyDialog      Deficiency List: range, options, accounts, preview, Save as Word
+      VacationDialog        Vacation Letters: case list (filters, tick boxes), edit form, Create Letters
+      UnlockDialog          PDF Unlocker: file list, passwords, output folder, Unlock PDFs
+      NoticesDialog         Licences...: shows THIRD-PARTY-NOTICES.txt (compiled-in resource)
       QtHelpers.h           qstr/stdstr/toPath/qpath, settingsFile, personLabel,
                             disconnectChildren, runGuarded
-    tests/                  Catch2 v3 (133 tests): core + Database + RenameSession + NameFixer + BatesSheet + DocumentName
+    tests/                  Catch2 v3 (169 tests): core + Database + RenameSession + NameFixer + BatesSheet + DocumentName + Vacation + PdfUnlock
     installer/FinRenamer.iss  Inno Setup script
 
 Dependencies: Qt 6.12 (Widgets, optional Pdf/PdfWidgets), SQLiteCpp 3.3.3, OpenXLSX
 (pinned commit c1220f3, reads/writes .xlsx; core links it PRIVATE) and Catch2 3.7.1 (vcpkg if
-present, else FetchContent from GitHub). OpenXLSX itself fetches pugixml, miniz and nowide.
-Only compile-checked/run on Linux/GCC so far -- the first MSVC build of OpenXLSX is the user's.
+present, else FetchContent from GitHub). OpenXLSX itself fetches pugixml, miniz and nowide (core also uses pugixml directly, and OpenXLSX's zip class, for the Vacation Letters sheet/template).
+Also qpdf 12.2.0 + zlib + libjpeg-turbo (PDF Unlocker; see that section). Only compile-checked/run on Linux/GCC so far -- the first MSVC build of OpenXLSX and qpdf is the user's.
 
 ## Conventions (follow these)
 
@@ -327,10 +489,15 @@ Only compile-checked/run on Linux/GCC so far -- the first MSVC build of OpenXLSX
 - **Schema changes**: append a new entry to `kMigrations` in `Database.cpp` and bump
   `kSchemaVersion`; never edit a shipped migration. Add a test that upgrades a
   database in the previous format (see "A version 1 database is upgraded").
-  Current schema version: **6** (v2 added people.display_name, v3 added
+  Current schema version: **9** (v9 document_templates.use_date; v8 document_templates; v7 combined_parts replaced combined_members; v2 added people.display_name, v3 added
   accounts.institution_display, v4 added account_previous_numbers and
   account_name_history, v5 added accounts.is_combined and combined_members, v6 added
   accounts.opened_on and closed_on, "YYYY-MM-DD" or empty).
+- **Database backups**: opening a database older than `kSchemaVersion` first copies it (SQLite
+  `VACUUM INTO`) to `finrenamer.db.backup-v<old version>` beside it (`-2`, `-3` if taken; never
+  overwritten, never pruned); if the copy fails nothing is upgraded. `Database::backupTo(file)` is the
+  File menu's **Back Up Database...** (Case List; saves a copy anywhere; no restore command -- put
+  the file back as finrenamer.db with the program closed).
 - **Database errors**: rule violations throw `DatabaseError` with a message meant
   for the user; GUI calls go through `ui::runGuarded(this, [&]{ ... })`.
 - **Widget destructors**: any widget that connects its children's signals to itself
@@ -338,8 +505,8 @@ Only compile-checked/run on Linux/GCC so far -- the first MSVC build of OpenXLSX
 - **Aggregate orders** (brace-initializers must follow them; new fields go at the END
   so existing initializers keep working):
   `Account{id, caseId, institution, institutionDisplay, accountType, lastFour, owners, previousLastFour, combined, openedOn, closedOn}`,
-  `AccountRecord{id, caseId, institution, institutionDisplay, accountType, lastFour, ownerIds, previousLastFour, memberIds, openedOn, closedOn}`,
-  `CombinedPart{accountId, accountType, lastFour}`,
+  `AccountRecord{id, caseId, institution, institutionDisplay, accountType, lastFour, ownerIds, previousLastFour, parts, openedOn, closedOn}`,
+  `CombinedPart{accountType, lastFour}`,
   `PlanInput{source, account, date, skip, number, document}`.
 - `updateAccount(record, numberCorrections)`: history rows store, for each old file
   name, the number files with that name should **now** use (corrected text, or the
@@ -350,20 +517,20 @@ Only compile-checked/run on Linux/GCC so far -- the first MSVC build of OpenXLSX
   Names won't find files named the old way.
 - Key rename-screen widgets have `objectName`s ("files", "account", "number", "date",
   "editAccount", "singleDate" (its boxes "year", "month", "day"), "quarter", "quarterYear", "mode", "skip", "next", "apply", "undo",
-  "summary", "byAccount", "byYear", "preview", and for the file types "kind", "textStyle", "label", "from",
-  "to", "description") for automated GUI tests.
-- **Start screen** (`HomeWindow`, what `main.cpp` shows): four tiles -- **Case List**
+  "summary", "byAccount", "byYear", "preview", and for the file types "kind", "templates", "label" and
+  "description" and "includeDate" (Other), "field_<name>" (a template's boxes)) for automated GUI tests.
+- **Start screen** (`HomeWindow`, what `main.cpp` shows): six tiles -- **Case List**
   (opens `MainWindow`, hiding the start screen until it's closed), **File Renamer** (the
   rename screen; the program's name for it is "File Renamer", not "Rename Files") and
-  **Deficiency List** and **Bates Log**; File Renamer and Deficiency List ask which case via `CasePickerDialog` (last case
+  **Deficiency List**, **Bates Log**, **Vacation Letters** and **PDF Unlocker**; File Renamer and Deficiency List ask which case via `CasePickerDialog` (last case
   preselected). Closing the start screen quits the app (`quitOnLastWindowClosed` is off).
-  objectNames: "caseList", "fileRenamer", "deficiencyList", "batesLog"; picker: "filter", "cases", "newCase".
+  objectNames: "caseList", "fileRenamer", "deficiencyList", "batesLog", "vacationLetters", "pdfUnlocker"; picker: "filter", "cases", "newCase".
   **Look** (user asked for the start screen and Case List to match the File Renamer):
   stock Fusion widgets, boxed panels (`QGroupBox`: Cases / People / Accounts), a
   1.5x bold title, and the File Renamer's footer -- information on the left (data
   folder, label "dataFolder"), **Close** on the right (button "close"); no
   `QStatusBar`. Keep new screens in this style.
-- Account dialog objectNames: "statementType", "members", "memberChoice", "addMember", "numbers", "openedOn", "closedOn".
+- Account dialog objectNames: "statementType", "institution", "parts" (combined: Type/Number table), "addPart", "removePart", "numbers", "openedOn", "closedOn".
 - Deficiency dialog objectNames: "folders", "subfolders", "fromMonth", "fromYear", "toMonth", "toYear",
   "present", "found", "missing", "accounts", "preview", "summary", "unmatched", "loose", "save".
 - Bates dialog objectNames: "workbook", "folder", "logFile", "browseWorkbook", "browseFolder", "browseLog",
@@ -402,8 +569,8 @@ Only compile-checked/run on Linux/GCC so far -- the first MSVC build of OpenXLSX
 Done: core logic, database, case/people/account management, rename screen
 (carry-forward, skip, sorting, partial apply, undo last, refresh), rename history,
 PDF preview, installer, previous account numbers, Update File Names (multi-folder,
-in place), Year/Month/Day date boxes, combined statements, Deficiency List (Word report), Bates Log (list files to Excel, add Bates numbers), file types on the rename screen
-(email / text / letter / other).
+in place), Year/Month/Day date boxes, combined statements, Deficiency List (Word report), Bates Log (list files to Excel, add Bates numbers), Vacation Letters (edit the shared case list, draft letters from the shared template), PDF Unlocker (remove PDF restrictions, open with a known password), file types on the rename screen
+(statement / user-defined templates / other).
 
 Ideas discussed, not built yet (user's choice of order):
 1. Real-world trial on copies of client folders; fix friction found.

@@ -16,10 +16,11 @@ class QLabel;
 class QLineEdit;
 class QListWidget;
 class QPushButton;
+class QTableWidget;
 
 // New/edit dialog for an account or a combined statement (one PDF covering
-// several accounts at the same institution; chosen in the "Statement" dropdown,
-// which is fixed once saved). Saves to the database itself when OK is
+// several accounts at the same institution: one institution plus a typed list of
+// account types and numbers; chosen in the "Statement" dropdown, which is fixed once saved). Saves to the database itself when OK is
 // pressed, so a rule violation is shown in the dialog without closing it.
 class AccountDialog : public QDialog {
     Q_OBJECT
@@ -43,17 +44,15 @@ private:
     void removeOwner();
     void moveOwner(int delta);
     void updateState();
-    void autofillInstitutionDisplay();
     finrenamer::Account currentAccount() const;
     bool isCombined() const;
     void updateKind();
 
-    // Combined statement: its accounts, in name order.
-    void reloadMemberChoices();
-    void addMember();
-    void removeMember();
-    void moveMember(int delta);
-    const finrenamer::Account* singleAccount(std::int64_t id) const;
+    // Combined statement: a typed list of (type, number), in name order.
+    void addPart(const QString& type = {}, const QString& number = {});
+    void removePart();
+    void movePart(int delta);
+    std::vector<finrenamer::CombinedPart> parts() const;
 
     // Account numbers list: newest first, the top one is current.
     std::vector<std::string> numbers() const;
@@ -72,18 +71,13 @@ private:
     QComboBox* kind_ = nullptr;
     QWidget* singlePage_ = nullptr;
     QWidget* combinedPage_ = nullptr;
-    std::vector<finrenamer::Account> singles_;  // this case's single accounts
-    QListWidget* members_ = nullptr;
-    QComboBox* memberChoice_ = nullptr;
-    QPushButton* addMemberBtn_ = nullptr;
-    QPushButton* removeMemberBtn_ = nullptr;
-    QPushButton* memberUpBtn_ = nullptr;
-    QPushButton* memberDownBtn_ = nullptr;
+    QTableWidget* parts_ = nullptr;  // columns: Account type, Number
+    QPushButton* removePartBtn_ = nullptr;
+    QPushButton* partUpBtn_ = nullptr;
+    QPushButton* partDownBtn_ = nullptr;
 
     QLineEdit* institution_ = nullptr;
     QLineEdit* institutionDisplay_ = nullptr;
-    QHash<QString, QString> knownDisplayNames_;  // lowercased institution -> last display name used
-    bool displayEditedByUser_ = false;           // stop autofilling once the user types their own
     QLineEdit* type_ = nullptr;
     DateField* openedOn_ = nullptr;   // optional
     DateField* closedOn_ = nullptr;   // optional

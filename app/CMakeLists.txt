@@ -19,7 +19,17 @@ qt_add_library(finrenamer_ui STATIC
     RenameWindow.h RenameWindow.cpp
     PdfPreview.h PdfPreview.cpp
     UpdateNamesDialog.h UpdateNamesDialog.cpp
+    VacationDialog.h VacationDialog.cpp
+    UnlockDialog.h UnlockDialog.cpp
+    NoticesDialog.h NoticesDialog.cpp
+    SignaturesDialog.h SignaturesDialog.cpp
+    TemplatesDialog.h TemplatesDialog.cpp
+    PossibleMatchesDialog.h PossibleMatchesDialog.cpp
 )
+
+# The third-party licence notices are compiled in, so "Licences..." always works.
+qt_add_resources(finrenamer_ui notices PREFIX "/" BASE "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/../THIRD-PARTY-NOTICES.txt")
 target_include_directories(finrenamer_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(finrenamer_ui PUBLIC finrenamer_core Qt6::Widgets)
 
@@ -67,6 +77,8 @@ endif()
 # the libraries CMake downloads (SQLiteCpp, Catch2) have their own install
 # rules for developers, which this keeps out of the package.
 install(TARGETS FinRenamer RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT FinRenamer)
+# Licence notices also travel as a plain file next to bin\ (the installer copies all of dist).
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../THIRD-PARTY-NOTICES.txt DESTINATION . COMPONENT FinRenamer)
 
 qt_generate_deploy_app_script(
     TARGET FinRenamer

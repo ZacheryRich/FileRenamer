@@ -67,11 +67,16 @@ public:
 
     // Carry-forward: if row `to` is blank, give it row `from`'s account (and
     // chosen number) and the following date (see nextDateSpec). After an email,
-    // text, letter or other file it copies the kind, label, people and the SAME
-    // date instead (the description is left blank, and the next file is more
-    // likely the same day than a month later). Returns true if anything was
+    // template or other file it copies the kind, template, typed text and the SAME
+    // date instead (the optional boxes, e.g. a description, are left blank, and the next
+    // file is more likely the same day than a month later). Returns true if anything was
     // filled in.
     bool carryForward(std::size_t from, std::size_t to);
+
+    // After templates were added, edited or deleted: rows (not yet renamed) that use one get the
+    // current version, keeping what was typed. A row whose template is gone keeps its text as an
+    // "Other" file name (or goes back to a statement row if nothing was typed).
+    void refreshTemplates(const std::vector<DocumentTemplate>& templates);
 
     // Index of the next row after `from` that hasn't been renamed, if any.
     std::optional<std::size_t> nextPending(std::size_t from) const;

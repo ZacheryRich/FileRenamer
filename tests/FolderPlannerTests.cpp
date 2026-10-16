@@ -52,7 +52,7 @@ TEST_CASE("A combined statement gets its own account folder")
 {
     Account c;
     c.institution = "Chase";
-    c.combined = {{1, "Chk", "1111"}, {2, "Sav", "2222"}};
+    c.combined = {{"Chk", "1111"}, {"Sav", "2222"}};
     c.owners = {"H"};
     SortOptions o;
     o.byAccount = true;

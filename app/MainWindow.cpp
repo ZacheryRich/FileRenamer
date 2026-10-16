@@ -1,7 +1,13 @@
 #include "MainWindow.h"
 
 #include <QAction>
+#include <QDate>
 #include <QDesktopServices>
+#include <QDir>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QSettings>
+#include <QStandardPaths>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -259,6 +265,28 @@ void MainWindow::buildMenus()
     });
     history->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_H));
 
+    file->addAction(tr("&Back Up Database..."), this, [this] {
+        QSettings settings(settingsFile(), QSettings::IniFormat);
+        QString dir = settings.value("backup/lastDir").toString();
+        if (dir.isEmpty() || !QFileInfo(dir).isDir())
+            dir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+        const QString suggested = QDir(dir).filePath(
+            QStringLiteral("FinRenamer backup %1.db").arg(QDate::currentDate().toString("yyyy.MM.dd")));
+        const QString target = QFileDialog::getSaveFileName(this, tr("Back Up Database"), suggested,
+                                                           tr("Database copy (*.db)"));
+        if (target.isEmpty()) return;
+        bool ok = false;
+        runGuarded(this, [&] {
+            db_.backupTo(toPath(target));
+            ok = true;
+        });
+        if (!ok) return;
+        settings.setValue("backup/lastDir", QFileInfo(target).absolutePath());
+        QMessageBox::information(this, tr("Back Up Database"),
+                                 tr("Saved a copy of all cases, people, accounts, templates and rename history to:\n%1\n\n"
+                                    "To use it, close the program and put the file back as finrenamer.db in the data folder.")
+                                     .arg(QDir::toNativeSeparators(target)));
+    });
     file->addAction(tr("Show &Data Folder"), this, [this] {
         QDesktopServices::openUrl(QUrl::fromLocalFile(dataFolder_));
     });
@@ -375,12 +403,10 @@ void MainWindow::reloadAccounts(std::optional<std::int64_t> select)
             if (a.isCombined()) {
                 // "Combined: Chk, Sav" / "1111, 2222", in the statement's order.
                 QStringList types, numbers;
-                for (const auto memberId : a.memberIds)
-                    for (const AccountRecord& m : accounts)
-                        if (m.id == memberId) {
-                            if (!m.accountType.empty()) types << qstr(m.accountType);
-                            numbers << qstr(m.lastFour);
-                        }
+                for (const CombinedPart& part : a.parts) {
+                    if (!part.accountType.empty()) types << qstr(part.accountType);
+                    numbers << qstr(part.lastFour);
+                }
                 type = types.isEmpty() ? tr("Combined") : tr("Combined: %1").arg(types.join(QStringLiteral(", ")));
                 number = numbers.join(QStringLiteral(", "));
             } else if (!a.previousLastFour.empty()) {
@@ -592,8 +618,7 @@ void MainWindow::deleteAccount()
         });
     const auto answer = QMessageBox::question(
         this, combined ? tr("Delete Combined Statement") : tr("Delete Account"),
-        (combined ? tr("Delete the combined statement \"%1\"?\n\nIts accounts are kept. Files already "
-                       "renamed for it are not affected.")
+        (combined ? tr("Delete the combined statement \"%1\"?\n\nFiles already renamed for it are not affected.")
                   : tr("Delete the account \"%1\"?\n\nFiles already renamed for it are not affected."))
             .arg(label),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);

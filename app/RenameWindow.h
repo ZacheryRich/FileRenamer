@@ -23,7 +23,7 @@ class QPushButton;
 class QTableWidget;
 
 // The rename screen for one case: pick a folder, say what each PDF is (a statement
-// for an account, an email, text, letter or other file) and its date, preview the new names, and apply.
+// for an account, a file made from one of the user's name templates, or an Other file) and its date, preview the new names, and apply.
 class RenameWindow : public QDialog {
     Q_OBJECT
 public:
@@ -55,6 +55,11 @@ private:
     finrenamer::DocumentInfo editorDocument() const;  // the kind and typed fields as shown
     void updateKindFields();                          // which fields the chosen kind shows
     void kindChanged();
+    void fillKindCombo();                             // Statement, the templates, Other
+    int kindIndex(const finrenamer::DocumentInfo& info) const;
+    void syncFieldEdits(const finrenamer::DocumentInfo& info);  // one box per field of the template
+    void setEditorEnabled(bool enabled);
+    void manageTemplates();
 
     void goToNext();
     void apply();
@@ -89,12 +94,19 @@ private:
     QGroupBox* editorBox_ = nullptr;
     QLabel* fileLabel_ = nullptr;
     QFormLayout* form_ = nullptr;
-    QComboBox* kind_ = nullptr;       // Statement / Email / Text / Letter / Other
-    QComboBox* textStyle_ = nullptr;  // single message / conversation / group chat
-    QLineEdit* label_ = nullptr;
-    QLineEdit* from_ = nullptr;
-    QLineEdit* to_ = nullptr;
-    QLineEdit* description_ = nullptr;
+    QComboBox* kind_ = nullptr;       // Statement / the templates / Other
+    QPushButton* templatesBtn_ = nullptr;
+    QLineEdit* label_ = nullptr;        // Other
+    QLineEdit* description_ = nullptr;  // Other
+    QCheckBox* useDate_ = nullptr;      // Other: include a date in the name
+    std::vector<finrenamer::DocumentTemplate> templates_;
+    struct FieldEdit {
+        std::string key;  // fieldKey of the box
+        QLineEdit* edit = nullptr;
+    };
+    std::vector<FieldEdit> fieldEdits_;  // the boxes of the template shown now
+    finrenamer::DocumentTemplate shownTemplate_;
+    bool haveShown_ = false;
     QWidget* accountBox_ = nullptr;
     QWidget* numberBox_ = nullptr;
     std::vector<QWidget*> editFields_;  // everything that is locked once a file is renamed or skipped

@@ -23,11 +23,11 @@ struct Person {
     std::string displayName;  // "H" -- what appears in filenames
 };
 
-// One account on a combined statement, in the order it appears in the name.
+// One account on a combined statement, in the order it appears in the name. Just typed
+// text: it doesn't have to be an account saved in the case.
 struct CombinedPart {
-    std::int64_t accountId = 0;
-    std::string accountType;  // "Checking"
-    std::string lastFour;     // the account's current number
+    std::string accountType;  // "Checking" (may be blank)
+    std::string lastFour;     // "1111"
 };
 
 // An account as the renaming code sees it. The database layer resolves the

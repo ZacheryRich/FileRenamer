@@ -18,6 +18,8 @@ public:
     void openFileRenamer();
     void openDeficiencyList();
     void openBatesLog();
+    void openVacationLetters();
+    void openPdfUnlocker();
 
 protected:
     void closeEvent(QCloseEvent* event) override;

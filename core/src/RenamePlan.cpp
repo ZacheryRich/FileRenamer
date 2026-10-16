@@ -92,10 +92,11 @@ RenamePlan buildPlan(const fs::path& rootIn, const std::vector<PlanInput>& input
                 fail(MoveStatus::Incomplete, *missing);
                 continue;
             }
-            if (auto err = validateDocumentDate(*input.document, *input.date)) {
-                fail(MoveStatus::Error, *err);
-                continue;
-            }
+            if (input.date && documentUsesDate(*input.document))
+                if (auto err = validateDocumentDate(*input.document, *input.date)) {
+                    fail(MoveStatus::Error, *err);
+                    continue;
+                }
         } else if (!input.account || !input.date) {
             fail(MoveStatus::Incomplete, {});
             continue;
@@ -106,17 +107,25 @@ RenamePlan buildPlan(const fs::path& rootIn, const std::vector<PlanInput>& input
                 continue;
             }
         }
-        if (auto err = validateDateSpec(*input.date)) {
-            fail(MoveStatus::Error, *err);
-            continue;
-        }
+        const bool dated = !isDocument || documentUsesDate(*input.document);
+        if (dated)
+            if (auto err = validateDateSpec(*input.date)) {
+                fail(MoveStatus::Error, *err);
+                continue;
+            }
 
         // Account and year folders are for statements only; other files stay where they are.
         const fs::path folder = isDocument ? plan.root
                                            : plan.root / subfolderFor(*input.account, *input.date, options.sort);
         const std::string ext = utf8FromPath(move.source.extension());
-        const std::string stem = isDocument ? buildDocumentFilename(*input.document, *input.date, "")
+        const std::string stem = isDocument ? buildDocumentFilename(*input.document, input.date, "")
                                             : buildFilename(*input.account, *input.date, "", input.number);
+
+        if (isReservedWindowsName(stem + ext)) {
+            fail(MoveStatus::Error, "Windows doesn't allow a file named \"" + stem + ext +
+                                        "\". Add more to the name.");
+            continue;
+        }
 
         // Find the first free name: "stem.pdf", "stem (2).pdf", ...
         fs::path dest;

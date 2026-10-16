@@ -14,6 +14,10 @@ namespace finrenamer {
 // collapsed, and leading/trailing spaces and trailing dots are trimmed.
 std::string sanitizeComponent(std::string_view text);
 
+// True if Windows refuses this file name whatever the folder: CON, PRN, AUX, NUL, COM1-9,
+// LPT1-9, in any letter case, with or without an extension ("nul.pdf", "Con.report.pdf").
+bool isReservedWindowsName(std::string_view fileName);
+
 // The label used in file names: "Chase Checking x1234 (John Smith; Jane Smith)".
 // A combined statement: "Chase Checking x1111, Savings x2222 (H)".
 // `number` picks one of the account's previous numbers instead of the current

@@ -12,8 +12,11 @@
 #include "CasePickerDialog.h"
 #include "DeficiencyDialog.h"
 #include "MainWindow.h"
+#include "NoticesDialog.h"
 #include "QtHelpers.h"
 #include "RenameWindow.h"
+#include "UnlockDialog.h"
+#include "VacationDialog.h"
 
 using namespace finrenamer;
 using namespace ui;
@@ -51,6 +54,10 @@ HomeWindow::HomeWindow(Database& db, const QString& dataFolder, QWidget* parent)
 
     auto* bates = makeTile("batesLog", tr("Bates Log"), tr("List a folder's files in Excel; add Bates numbers from Acrobat's log"));
 
+    auto* vacation = makeTile("vacationLetters", tr("Vacation Letters"), tr("Edit the shared case list; draft vacation letters from the template"));
+
+    auto* unlocker = makeTile("pdfUnlocker", tr("PDF Unlocker"), tr("Remove print, copy and edit restrictions; open password-protected PDFs"));
+
     auto* central = new QWidget;
     auto* layout = new QVBoxLayout(central);
     layout->addWidget(heading);
@@ -60,6 +67,8 @@ HomeWindow::HomeWindow(Database& db, const QString& dataFolder, QWidget* parent)
     layout->addWidget(renamer);
     layout->addWidget(deficiency);
     layout->addWidget(bates);
+    layout->addWidget(vacation);
+    layout->addWidget(unlocker);
     layout->addStretch();
 
     // Footer like the File Renamer's: information on the left, Close on the right.
@@ -72,6 +81,11 @@ HomeWindow::HomeWindow(Database& db, const QString& dataFolder, QWidget* parent)
     connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
     auto* footer = new QHBoxLayout;
     footer->addWidget(dataLabel, 1);
+    auto* licencesBtn = new QPushButton(tr("Licences..."));
+    licencesBtn->setObjectName("licences");
+    licencesBtn->setAutoDefault(false);
+    connect(licencesBtn, &QPushButton::clicked, this, [this] { NoticesDialog(this).exec(); });
+    footer->addWidget(licencesBtn);
     footer->addWidget(closeBtn);
     layout->addLayout(footer);
     setCentralWidget(central);
@@ -80,7 +94,9 @@ HomeWindow::HomeWindow(Database& db, const QString& dataFolder, QWidget* parent)
     connect(renamer, &QPushButton::clicked, this, &HomeWindow::openFileRenamer);
     connect(deficiency, &QPushButton::clicked, this, &HomeWindow::openDeficiencyList);
     connect(bates, &QPushButton::clicked, this, &HomeWindow::openBatesLog);
-    resize(520, 470);
+    connect(vacation, &QPushButton::clicked, this, &HomeWindow::openVacationLetters);
+    connect(unlocker, &QPushButton::clicked, this, &HomeWindow::openPdfUnlocker);
+    resize(520, 630);
 }
 
 HomeWindow::~HomeWindow()
@@ -135,5 +151,17 @@ void HomeWindow::openDeficiencyList()
 void HomeWindow::openBatesLog()
 {
     BatesDialog dialog(this);
+    dialog.exec();
+}
+
+void HomeWindow::openVacationLetters()
+{
+    VacationDialog dialog(this);
+    dialog.exec();
+}
+
+void HomeWindow::openPdfUnlocker()
+{
+    UnlockDialog dialog(this);
     dialog.exec();
 }
