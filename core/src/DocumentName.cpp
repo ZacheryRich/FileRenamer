@@ -206,11 +206,11 @@ std::string sampleLabel(std::string_view pattern)
 std::vector<DocumentTemplate> exampleTemplates()
 {
     return {
-        {0, "Email", "Email from {Sender} to {Recipient}[ ({Description})]", false, true},
-        {0, "Text", "Texts from {Sender} to {Recipient}[ ({Description})]", false, true},
-        {0, "Text Conversation", "Texts between {Person 1} and {Person 2}[ ({Description})]", true, true},
-        {0, "Group Text", "Texts with {People or group name}[ ({Description})]", true, true},
-        {0, "Letter", "Ltr from {Sender}[ ({Description})]", false, true},
+        {0, "Email", "Email from {Sender} to {Recipient}[ ({Description})]"},
+        {0, "Text", "Texts from {Sender} to {Recipient}[ ({Description})]"},
+        {0, "Text Conversation", "Texts between {Person 1} and {Person 2}[ ({Description})]"},
+        {0, "Group Text", "Texts with {People or group name}[ ({Description})]"},
+        {0, "Letter", "Ltr from {Sender}[ ({Description})]"},
     };
 }
 
@@ -254,7 +254,9 @@ std::string buildDocumentFilename(const DocumentInfo& info, const std::optional<
 {
     const std::string label = documentLabel(info);
     if (!documentUsesDate(info) || !date) return label + std::string(extension);
-    return formatDateSpec(*date) + " " + label + std::string(extension);
+    // Only templates can leave the space out; Other files always have it.
+    const bool space = info.kind != DocKind::Template || info.tmpl.spaceAfterDate;
+    return formatDateSpec(*date) + (space ? " " : "") + label + std::string(extension);
 }
 
 std::optional<std::string> documentMissing(const DocumentInfo& info, bool dateMissing)
@@ -289,25 +291,6 @@ std::optional<std::string> documentMissing(const DocumentInfo& info, bool dateMi
     return joinNeeds(needs);
 }
 
-DateModes allowedDateModes(const DocumentInfo& info)
-{
-    switch (info.kind) {
-    case DocKind::Statement: return {true, true, true};
-    case DocKind::Template: return {true, info.tmpl.allowPeriod, false};
-    case DocKind::Other: return {true, true, false};
-    }
-    return {};
-}
-
-std::optional<std::string> validateDocumentDate(const DocumentInfo& info, const DateSpec& date)
-{
-    if (!documentUsesDate(info)) return std::nullopt;
-    const DateModes modes = allowedDateModes(info);
-    if (std::holds_alternative<Period>(date) && !modes.period) return std::string("This kind of file takes a single date, not a period.");
-    if (std::holds_alternative<Quarter>(date) && !modes.quarter) return std::string("Only statements can use a quarter.");
-    return std::nullopt;
-}
-
 void clearOptionalFields(DocumentInfo& info)
 {
     if (info.kind == DocKind::Other) {
@@ -335,8 +318,8 @@ std::string templatesToXml(const std::vector<DocumentTemplate>& templates)
         auto node = root.append_child("template");
         node.append_attribute("name") = t.name.c_str();
         node.append_attribute("pattern") = t.pattern.c_str();
-        node.append_attribute("allowPeriod") = t.allowPeriod ? 1 : 0;
         node.append_attribute("useDate") = t.useDate ? 1 : 0;
+        node.append_attribute("spaceAfterDate") = t.spaceAfterDate ? 1 : 0;
     }
     std::ostringstream out;
     doc.save(out, "  ", pugi::format_default, pugi::encoding_utf8);
@@ -360,8 +343,8 @@ TemplateImport templatesFromXml(const std::string& xml)
         DocumentTemplate t;
         t.name = node.attribute("name").as_string();
         t.pattern = node.attribute("pattern").as_string();
-        t.allowPeriod = node.attribute("allowPeriod").as_bool(false);
         t.useDate = node.attribute("useDate").as_bool(true);
+        t.spaceAfterDate = node.attribute("spaceAfterDate").as_bool(true);
         const std::string label = t.name.empty() ? std::string("(no name)") : "\"" + t.name + "\"";
         if (const auto error = validateTemplate(t)) {
             result.problems.push_back(label + " was skipped: " + *error);

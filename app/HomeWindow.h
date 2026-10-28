@@ -1,6 +1,9 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QPointer>
+#include <functional>
+#include <optional>
 
 #include "finrenamer/Database.h"
 
@@ -15,8 +18,11 @@ public:
     ~HomeWindow() override;
 
     void openCaseList();
+    // With a case id (from the Case List) the case picker is skipped.
     void openFileRenamer();
+    void openFileRenamerFor(std::int64_t caseId);
     void openDeficiencyList();
+    void openDeficiencyListFor(std::int64_t caseId);
     void openBatesLog();
     void openVacationLetters();
     void openPdfUnlocker();
@@ -25,9 +31,17 @@ protected:
     void closeEvent(QCloseEvent* event) override;
 
 private:
+    // One window per tool: shows the tool in `slot` if it is open, else builds it with `make`
+    // (which may return nullptr if the user cancels). Tools are separate top-level windows.
+    void showTool(QPointer<QWidget>& slot, const std::function<QWidget*()>& make);
+    void openFileRenamerImpl(std::optional<std::int64_t> caseId);
+    void openDeficiencyListImpl(std::optional<std::int64_t> caseId);
+    QList<QPointer<QWidget>> openTools() const;
+
     // Asks for a case; nullopt if there are none (says so) or the user cancels.
     std::optional<std::int64_t> chooseCase(const QString& purpose);
 
     finrenamer::Database& db_;
     QString dataFolder_;
+    QPointer<QWidget> caseList_, renamer_, deficiency_, bates_, vacation_, unlocker_;
 };

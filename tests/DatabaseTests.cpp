@@ -35,13 +35,13 @@ TEST_CASE("A new database is created at the current schema version")
     const fs::path file = dir.path() / "finrenamer.db";
     {
         Database db(file);
-        CHECK(db.schemaVersion() == 9);
+        CHECK(db.schemaVersion() == 10);
         db.createCase({0, "Persisted", ""});
     }
     CHECK(fs::exists(file));
 
     Database reopened(file);  // reopening must not re-run migrations
-    CHECK(reopened.schemaVersion() == 9);
+    CHECK(reopened.schemaVersion() == 10);
     REQUIRE(reopened.listCases().size() == 1);
     CHECK(reopened.listCases()[0].clientName == "Persisted");
 }
@@ -330,7 +330,7 @@ TEST_CASE("A version 1 database is upgraded and keeps its data")
     }
 
     Database db(file);
-    CHECK(db.schemaVersion() == 9);
+    CHECK(db.schemaVersion() == 10);
     const auto people = db.listPeople(1);
     REQUIRE(people.size() == 1);
     CHECK(people[0].displayName == "José Núñez");
@@ -571,7 +571,7 @@ TEST_CASE("A version 4 database is upgraded to combined statements")
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 9);
+    CHECK(db.schemaVersion() == 10);
     REQUIRE(db.loadAccounts(1).size() == 1);
     CHECK_FALSE(db.loadAccounts(1)[0].isCombined());
     AccountRecord c;
@@ -612,7 +612,7 @@ TEST_CASE("A version 6 database keeps its combined statements, now with typed pa
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 9);
+    CHECK(db.schemaVersion() == 10);
     const auto accounts = db.loadAccounts(1);
     REQUIRE(accounts.size() == 3);
     const Account& combined = accounts.back();
@@ -689,7 +689,7 @@ TEST_CASE("A version 5 database is upgraded to opening and closing dates")
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 9);
+    CHECK(db.schemaVersion() == 10);
     auto r = *db.getAccount(1);
     CHECK_FALSE(r.openedOn);
     CHECK_FALSE(r.closedOn);
@@ -723,26 +723,25 @@ TEST_CASE("Templates are saved, listed by name, validated and deleted")
     Database db = Database::openInMemory();
     CHECK(db.listTemplates().empty());
 
-    const auto email = db.createTemplate({0, "Email", "Email from {Sender} to {Recipient}[ ({Description})]", false});
-    const auto text = db.createTemplate({0, "  Text Conversation ", "Texts between {A} and {B}", true});
+    const auto email = db.createTemplate({0, "Email", "Email from {Sender} to {Recipient}[ ({Description})]"});
+    const auto text = db.createTemplate({0, "  Text Conversation ", "Texts between {A} and {B}"});
     auto all = db.listTemplates();
     REQUIRE(all.size() == 2);
     CHECK(all[0].name == "Email");
     CHECK(all[1].name == "Text Conversation");  // trimmed
-    CHECK(all[1].allowPeriod);
 
     all[0].pattern = "Mail from {Sender}";
     db.updateTemplate(all[0]);
     CHECK(db.listTemplates()[0].pattern == "Mail from {Sender}");
 
-    CHECK_THROWS_AS(db.createTemplate({0, "EMAIL", "x {A}", false}), DatabaseError);   // name taken, any case
-    CHECK_THROWS_AS(db.createTemplate({0, "Bad", "x {A", false}), DatabaseError);      // bad pattern
-    CHECK_THROWS_AS(db.createTemplate({0, " ", "x {A}", false}), DatabaseError);       // no name
-    CHECK_THROWS_AS(db.createTemplate({0, "Other", "x {A}", false}), DatabaseError);   // built-in names
+    CHECK_THROWS_AS(db.createTemplate({0, "EMAIL", "x {A}"}), DatabaseError);   // name taken, any case
+    CHECK_THROWS_AS(db.createTemplate({0, "Bad", "x {A"}), DatabaseError);      // bad pattern
+    CHECK_THROWS_AS(db.createTemplate({0, " ", "x {A}"}), DatabaseError);       // no name
+    CHECK_THROWS_AS(db.createTemplate({0, "Other", "x {A}"}), DatabaseError);   // built-in names
     auto renamed = db.listTemplates()[1];
     renamed.name = "email";
     CHECK_THROWS_AS(db.updateTemplate(renamed), DatabaseError);
-    DocumentTemplate gone{9999, "Nope", "x", false};
+    DocumentTemplate gone{9999, "Nope", "x"};
     CHECK_THROWS_AS(db.updateTemplate(gone), DatabaseError);
 
     db.deleteTemplate(email);
@@ -766,16 +765,16 @@ TEST_CASE("A version 7 database is upgraded and gets an empty template list")
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 9);
+    CHECK(db.schemaVersion() == 10);
     CHECK(db.getCase(1).has_value());
     CHECK(db.listTemplates().empty());
-    CHECK_NOTHROW(db.createTemplate({0, "Letter", "Ltr from {Sender}", false}));
+    CHECK_NOTHROW(db.createTemplate({0, "Letter", "Ltr from {Sender}"}));
 }
 
 TEST_CASE("Templates can leave the date out, and a version 8 database gets that setting")
 {
     Database db = Database::openInMemory();
-    const auto id = db.createTemplate({0, "Undated", "Photo of {Thing}", false, false});
+    const auto id = db.createTemplate({0, "Undated", "Photo of {Thing}", false});
     CHECK_FALSE(db.listTemplates()[0].useDate);
     auto t = db.listTemplates()[0];
     t.useDate = true;
@@ -799,10 +798,9 @@ TEST_CASE("Templates can leave the date out, and a version 8 database gets that 
         )sql");
     }
     Database upgraded(file);
-    CHECK(upgraded.schemaVersion() == 9);
+    CHECK(upgraded.schemaVersion() == 10);
     REQUIRE(upgraded.listTemplates().size() == 1);
     CHECK(upgraded.listTemplates()[0].useDate);  // existing templates keep their date
-    CHECK(upgraded.listTemplates()[0].allowPeriod);
 }
 
 TEST_CASE("Upgrading an older database first leaves a backup copy beside it")
@@ -813,7 +811,7 @@ TEST_CASE("Upgrading an older database first leaves a backup copy beside it")
         Database db(dbFile);
         db.createCase({0, "Smith", ""});
     }
-    CHECK_FALSE(fs::exists(data.path() / "finrenamer.db.backup-v9"));  // a new database needs none
+    CHECK_FALSE(fs::exists(data.path() / "finrenamer.db.backup-v10"));  // a new database needs none
 
     // Pretend the file is an older version, then open it again.
     {
@@ -823,7 +821,7 @@ TEST_CASE("Upgrading an older database first leaves a backup copy beside it")
     }
     {
         Database db(dbFile);
-        CHECK(db.schemaVersion() == 9);
+        CHECK(db.schemaVersion() == 10);
         CHECK(db.listCases().size() == 1);
     }
     const fs::path backup = data.path() / "finrenamer.db.backup-v7";
@@ -836,7 +834,7 @@ TEST_CASE("Upgrading an older database first leaves a backup copy beside it")
 
     // Opening a current database makes no further backup.
     { Database db(dbFile); }
-    CHECK_FALSE(fs::exists(data.path() / "finrenamer.db.backup-v9"));
+    CHECK_FALSE(fs::exists(data.path() / "finrenamer.db.backup-v10"));
     CHECK_FALSE(fs::exists(data.path() / "finrenamer.db.backup-v7-2"));
 }
 
@@ -852,4 +850,35 @@ TEST_CASE("backupTo writes a complete copy that opens as a database, replacing a
     Database restored(copy);
     CHECK(restored.listCases().size() == 2);
     CHECK_FALSE(fs::exists(data.path() / "it's a copy.db.writing"));
+}
+
+TEST_CASE("Templates can attach to the date, and a version 9 database gets that setting")
+{
+    Database db = Database::openInMemory();
+    db.createTemplate({0, "Tight", "_Photo of {Thing}", true, false});
+    db.createTemplate({0, "Normal", "Photo of {Thing}"});
+    for (const auto& t : db.listTemplates()) CHECK(t.spaceAfterDate == (t.name == "Normal"));
+    auto t = db.listTemplates()[1];  // Tight
+    t.spaceAfterDate = true;
+    db.updateTemplate(t);
+    CHECK(db.listTemplates()[1].spaceAfterDate);
+
+    testing::TempDir dir;
+    const fs::path file = dir.path() / "v9.db";
+    { Database created(file); }
+    {
+        SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
+        old.exec(R"sql(
+            DROP TABLE document_templates;
+            CREATE TABLE document_templates (id INTEGER PRIMARY KEY, name TEXT NOT NULL, pattern TEXT NOT NULL,
+                                             allow_period INTEGER NOT NULL DEFAULT 0, use_date INTEGER NOT NULL DEFAULT 1);
+            INSERT INTO document_templates (name, pattern, allow_period, use_date) VALUES ('Email', 'Email from {A}', 1, 1);
+            PRAGMA user_version = 9;
+        )sql");
+    }
+    Database upgraded(file);
+    CHECK(upgraded.schemaVersion() == 10);
+    REQUIRE(upgraded.listTemplates().size() == 1);
+    CHECK(upgraded.listTemplates()[0].spaceAfterDate);  // existing templates keep their space
+    CHECK(fs::exists(dir.path() / "v9.db.backup-v9"));
 }

@@ -834,8 +834,7 @@ void RenameWindow::updateKindFields()
     label_->setPlaceholderText(tr("What it is, e.g. Photo, Court Order, Invoice"));
     description_->setPlaceholderText(tr("Optional"));
 
-    const DateModes modes = allowedDateModes(info);
-    date_->setModes(modes.period, modes.quarter);
+    date_->setModes(true, true);  // single date, period and quarter for every kind
 }
 
 void RenameWindow::kindChanged()

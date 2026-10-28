@@ -92,11 +92,6 @@ RenamePlan buildPlan(const fs::path& rootIn, const std::vector<PlanInput>& input
                 fail(MoveStatus::Incomplete, *missing);
                 continue;
             }
-            if (input.date && documentUsesDate(*input.document))
-                if (auto err = validateDocumentDate(*input.document, *input.date)) {
-                    fail(MoveStatus::Error, *err);
-                    continue;
-                }
         } else if (!input.account || !input.date) {
             fail(MoveStatus::Incomplete, {});
             continue;

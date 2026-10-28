@@ -13,12 +13,12 @@ namespace {
 
 DocumentTemplate emailTemplate()
 {
-    return {1, "Email", "Email from {Sender} to {Recipient}[ ({Description})]", false};
+    return {1, "Email", "Email from {Sender} to {Recipient}[ ({Description})]"};
 }
 
 DocumentTemplate conversationTemplate()
 {
-    return {2, "Text Conversation", "{Label} between {Person 1} and {Person 2}[ ({Description})]", true};
+    return {2, "Text Conversation", "{Label} between {Person 1} and {Person 2}[ ({Description})]"};
 }
 
 DocumentInfo filled(const DocumentTemplate& t, std::initializer_list<std::pair<const char*, const char*>> values)
@@ -95,7 +95,7 @@ TEST_CASE("Template names: date, then the pattern filled in")
 
 TEST_CASE("A field used twice is typed once, and brackets can be literal")
 {
-    const DocumentTemplate t{3, "Memo", "\\[{Case}\\] {Case} memo from {Author}", false};
+    const DocumentTemplate t{3, "Memo", "\\[{Case}\\] {Case} memo from {Author}"};
     const DocumentInfo d = filled(t, {{"case", "Smith"}, {"Author", "Pat"}});
     CHECK(documentLabel(d) == "[Smith] Smith memo from Pat");
 }
@@ -119,7 +119,7 @@ TEST_CASE("What is still missing")
     CHECK(documentMissing(email("John", ""), true) == "Needs recipient and a date");
     CHECK_FALSE(documentMissing(email("John", "Jane")));
 
-    const DocumentTemplate t{4, "Pair", "{A} and {B}[ re {C} / {D}]", false};
+    const DocumentTemplate t{4, "Pair", "{A} and {B}[ re {C} / {D}]"};
     CHECK(documentMissing(filled(t, {{"A", "x"}, {"B", "y"}})) == std::nullopt);
     CHECK(documentMissing(filled(t, {{"A", "x"}, {"B", "y"}, {"C", "z"}})) == "Needs d");   // an optional part once started
     CHECK(documentMissing(filled(t, {})) == "Needs a and b");
@@ -127,20 +127,18 @@ TEST_CASE("What is still missing")
     CHECK(documentMissing(other("")) == "Needs a label");
     CHECK_FALSE(documentMissing(other("Photo")));  // the description is optional
 
-    DocumentInfo broken = filled({5, "Bad", "{A", false}, {{"A", "x"}});
+    DocumentInfo broken = filled({5, "Bad", "{A"}, {{"A", "x"}});
     CHECK(documentMissing(broken)->find("not valid") != std::string::npos);
 }
 
-TEST_CASE("Which dates each kind accepts")
+TEST_CASE("Every kind of file can use a single date, a period or a quarter")
 {
-    CHECK_FALSE(validateDocumentDate(email("a", "b"), kJan31));
-    CHECK(validateDocumentDate(email("a", "b"), kJanPeriod));
-    CHECK_FALSE(validateDocumentDate(filled(conversationTemplate(), {}), kJanPeriod));
-    CHECK_FALSE(validateDocumentDate(other("x"), kJanPeriod));
-    CHECK(validateDocumentDate(other("x"), Quarter{2026, 1}));
-    CHECK(validateDocumentDate(email("a", "b"), Quarter{2026, 1}));
-    CHECK(allowedDateModes(email("a", "b")).period == false);
-    CHECK(allowedDateModes(other("x")).period);
+    const DocumentInfo kinds[] = {email("John", "Jane"), other("Report")};
+    for (const DocumentInfo& info : kinds) {
+        CHECK(buildDocumentFilename(info, kJanPeriod, "") != buildDocumentFilename(info, kJan31, ""));
+        CHECK(buildDocumentFilename(info, Quarter{2026, 1}, "").rfind("2026.Q1 ", 0) == 0);
+        CHECK(buildDocumentFilename(info, WholeYear{2026}, "").rfind("2026 ", 0) == 0);
+    }
 }
 
 TEST_CASE("Documents are renamed through the plan, and never sorted into folders")
@@ -159,7 +157,7 @@ TEST_CASE("Documents are renamed through the plan, and never sorted into folders
     inputs[1].date = kJan31;
     inputs[2].source = c;
     inputs[2].document = email("John", "Jane");
-    inputs[2].date = kJanPeriod;               // a period isn't allowed for this template
+    inputs[2].date = kJanPeriod;               // a period is fine for every kind
 
     PlanOptions options;
     options.sort.byAccount = true;  // both ignored for documents
@@ -170,7 +168,8 @@ TEST_CASE("Documents are renamed through the plan, and never sorted into folders
     CHECK(plan.moves[0].destination == plan.root / "2026.01.31 Email from John to Jane (Re pickup).pdf");
     CHECK(plan.moves[1].status == MoveStatus::Incomplete);
     CHECK(plan.moves[1].message == "Needs recipient");
-    CHECK(plan.moves[2].status == MoveStatus::Error);
+    CHECK(plan.moves[2].status == MoveStatus::Ready);
+    CHECK(plan.moves[2].destination == plan.root / "2026.01.01 - 2026.01.31 Email from John to Jane.pdf");
 }
 
 TEST_CASE("A document without a date is incomplete, and two with the same name get (2)")
@@ -266,23 +265,20 @@ TEST_CASE("Editing or deleting a template updates the rows that use it")
 TEST_CASE("Every kind of file can be dated with just a year")
 {
     const DateSpec year = WholeYear{2025};
-    CHECK_FALSE(validateDocumentDate(email("a", "b"), year));
-    CHECK_FALSE(validateDocumentDate(other("Tax Return"), year));
     CHECK(buildDocumentFilename(other("Tax Return"), year) == "2025 Tax Return.pdf");
     CHECK(buildDocumentFilename(email("John", "Jane"), year) == "2025 Email from John to Jane.pdf");
 
     const DateSpec month = YearMonth{2025, 3};
-    CHECK_FALSE(validateDocumentDate(email("a", "b"), month));
     CHECK(buildDocumentFilename(other("Tax Return"), month) == "2025.03 Tax Return.pdf");
 }
 
 TEST_CASE("Template validation and the example templates")
 {
-    CHECK(validateTemplate({0, "", "{A}", false}));
-    CHECK(validateTemplate({0, "Statement", "{A}", false}));
-    CHECK(validateTemplate({0, "other", "{A}", false}));
-    CHECK(validateTemplate({0, "Email", "{A", false}));
-    CHECK_FALSE(validateTemplate({0, "Email", "{A}", false}));
+    CHECK(validateTemplate({0, "", "{A}"}));
+    CHECK(validateTemplate({0, "Statement", "{A}"}));
+    CHECK(validateTemplate({0, "other", "{A}"}));
+    CHECK(validateTemplate({0, "Email", "{A"}));
+    CHECK_FALSE(validateTemplate({0, "Email", "{A}"}));
 
     const auto examples = exampleTemplates();
     CHECK(examples.size() == 5);
@@ -292,16 +288,15 @@ TEST_CASE("Template validation and the example templates")
 
 TEST_CASE("A template or an Other file can leave the date out")
 {
-    DocumentTemplate t{7, "Photo", "Photo of {Thing}", false, false};
+    DocumentTemplate t{7, "Photo", "Photo of {Thing}", false};
     DocumentInfo d = filled(t, {{"Thing", "the car"}});
     CHECK_FALSE(documentUsesDate(d));
     CHECK(buildDocumentFilename(d, kJan31) == "Photo of the car.pdf");   // a date, if one is typed, is ignored
     CHECK(buildDocumentFilename(d, std::nullopt) == "Photo of the car.pdf");
     CHECK_FALSE(documentMissing(d, true));                               // no date needed
     CHECK(documentMissing(filled(t, {}), true) == "Needs thing");
-    CHECK_FALSE(validateDocumentDate(d, kJanPeriod));                    // nothing to validate
 
-    const DocumentTemplate optionalOnly{8, "Note", "[{A}]", false, false};
+    const DocumentTemplate optionalOnly{8, "Note", "[{A}]", false};
     CHECK(documentMissing(filled(optionalOnly, {})) == "Needs a name");
 
     DocumentInfo o = other("Court Order");
@@ -322,7 +317,7 @@ TEST_CASE("Files without a date are renamed through the plan with no date")
     inputs[0].document = other("Court Order", "custody");
     inputs[0].document->noDate = true;                  // no date typed
     inputs[1].source = dir.touch("b.pdf");
-    inputs[1].document = filled({9, "Photo", "Photo of {Thing}", false, false}, {{"Thing", "car"}});
+    inputs[1].document = filled({9, "Photo", "Photo of {Thing}", false}, {{"Thing", "car"}});
     const RenamePlan plan = buildPlan(dir.path(), inputs);
     CHECK(plan.moves[0].status == MoveStatus::Ready);
     CHECK(plan.moves[0].destination.filename() == "Court Order (custody).pdf");
@@ -366,7 +361,6 @@ TEST_CASE("Templates survive an export and import, and bad ones are reported")
     for (std::size_t i = 0; i < mine.size(); ++i) {
         CHECK(back.templates[i].name == mine[i].name);
         CHECK(back.templates[i].pattern == mine[i].pattern);
-        CHECK(back.templates[i].allowPeriod == mine[i].allowPeriod);
         CHECK(back.templates[i].useDate == mine[i].useDate);
         CHECK(back.templates[i].id == 0);
     }
@@ -383,4 +377,24 @@ TEST_CASE("Templates survive an export and import, and bad ones are reported")
     CHECK(templatesFromXml("not xml at all").templates.empty());
     CHECK(templatesFromXml("<other/>").problems.size() == 1);
     CHECK(templatesFromXml("<fileNameTemplates/>").problems.size() == 1);
+}
+
+TEST_CASE("A template can put its text straight after the date, with no space")
+{
+    DocumentTemplate tight{1, "Tight", "_Note {Who}", true, false};
+    DocumentTemplate normal{2, "Normal", "Note {Who}"};
+    CHECK(buildDocumentFilename(filled(tight, {{"Who", "Jo"}}), kJan31) == "2026.01.31_Note Jo.pdf");
+    CHECK(buildDocumentFilename(filled(normal, {{"Who", "Jo"}}), kJan31) == "2026.01.31 Note Jo.pdf");
+    tight.pattern = "Note {Who}";
+    CHECK(buildDocumentFilename(filled(tight, {{"Who", "Jo"}}), kJan31) == "2026.01.31Note Jo.pdf");
+    tight.useDate = false;  // no date: nothing to attach to
+    CHECK(buildDocumentFilename(filled(tight, {{"Who", "Jo"}}), kJan31) == "Note Jo.pdf");
+
+    // Survives export and import; files without the setting mean "space".
+    const auto back = templatesFromXml(templatesToXml({tight, normal}));
+    REQUIRE(back.templates.size() == 2);
+    CHECK_FALSE(back.templates[0].spaceAfterDate);
+    CHECK(back.templates[1].spaceAfterDate);
+    CHECK(templatesFromXml("<fileNameTemplates><template name='A' pattern='A {X}'/></fileNameTemplates>")
+              .templates[0].spaceAfterDate);
 }

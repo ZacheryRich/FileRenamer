@@ -25,6 +25,14 @@ public:
 
     void selectCase(std::int64_t caseId);
 
+    // Re-reads people and accounts after another window (the File Renamer) may have changed them.
+    void refreshAfterTool();
+
+signals:
+    // The File Renamer and Deficiency List are single windows owned by the start screen.
+    void fileRenamerRequested(std::int64_t caseId);
+    void deficiencyListRequested(std::int64_t caseId);
+
 private:
     void buildUi();
     void buildMenus();

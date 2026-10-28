@@ -27,7 +27,9 @@ namespace {
 
 QString exampleName(const DocumentTemplate& t)
 {
-    return (t.useDate ? QStringLiteral("2026.01.31 ") : QString()) + qstr(sampleLabel(t.pattern)) +
+    const QString date = !t.useDate ? QString()
+                         : t.spaceAfterDate ? QStringLiteral("2026.01.31 ") : QStringLiteral("2026.01.31");
+    return date + qstr(sampleLabel(t.pattern)) +
            QStringLiteral(".pdf");
 }
 
@@ -47,9 +49,11 @@ public:
         useDate_ = new QCheckBox(tr("Start the name with a date"));
         useDate_->setObjectName("useDate");
         useDate_->setChecked(t.useDate);
-        period_ = new QCheckBox(tr("Also allow a period (start and end date), not just one date"));
-        period_->setObjectName("allowPeriod");
-        period_->setChecked(t.allowPeriod);
+        space_ = new QCheckBox(tr("Put a space after the date"));
+        space_->setObjectName("spaceAfterDate");
+        space_->setChecked(t.spaceAfterDate);
+        space_->setToolTip(tr("Off: the text follows the date directly, e.g. 2026.01.31Email... "
+                              "(start the pattern with your own separator, like \"_\" or \" - \")."));
         boxes_ = new QLabel;
         boxes_->setWordWrap(true);
         example_ = new QLabel;
@@ -76,7 +80,7 @@ public:
         form->addWidget(pattern_);
         form->addWidget(help);
         form->addWidget(useDate_);
-        form->addWidget(period_);
+        form->addWidget(space_);
         form->addWidget(boxes_);
         form->addWidget(example_);
         form->addWidget(problem_);
@@ -86,6 +90,7 @@ public:
         connect(name_, &QLineEdit::textChanged, this, [this] { update(); });
         connect(pattern_, &QLineEdit::textChanged, this, [this] { update(); });
         connect(useDate_, &QCheckBox::toggled, this, [this] { update(); });
+        connect(space_, &QCheckBox::toggled, this, [this] { update(); });
         connect(buttons_, &QDialogButtonBox::accepted, this, &QDialog::accept);
         connect(buttons_, &QDialogButtonBox::rejected, this, &QDialog::reject);
         update();
@@ -93,14 +98,14 @@ public:
 
     DocumentTemplate result() const
     {
-        return {id_, stdstr(name_->text().trimmed()), stdstr(pattern_->text()), period_->isChecked() && useDate_->isChecked(),
-                useDate_->isChecked()};
+        return {id_, stdstr(name_->text().trimmed()), stdstr(pattern_->text()),
+                useDate_->isChecked(), space_->isChecked()};
     }
 
 private:
     void update()
     {
-        period_->setEnabled(useDate_->isChecked());
+        space_->setEnabled(useDate_->isChecked());
         const DocumentTemplate t = result();
         std::optional<std::string> error = validateTemplate(t);
         if (!error)
@@ -122,7 +127,7 @@ private:
     QLineEdit* name_ = nullptr;
     QLineEdit* pattern_ = nullptr;
     QCheckBox* useDate_ = nullptr;
-    QCheckBox* period_ = nullptr;
+    QCheckBox* space_ = nullptr;
     QLabel* boxes_ = nullptr;
     QLabel* example_ = nullptr;
     QLabel* problem_ = nullptr;
@@ -238,7 +243,7 @@ void TemplatesDialog::reload(std::int64_t select)
         table_->insertRow(row);
         table_->setItem(row, 0, new QTableWidgetItem(qstr(t.name)));
         table_->setItem(row, 1, new QTableWidgetItem(exampleName(t)));
-        table_->setItem(row, 2, new QTableWidgetItem(!t.useDate ? tr("None") : t.allowPeriod ? tr("Date or period") : tr("Date")));
+        table_->setItem(row, 2, new QTableWidgetItem(!t.useDate ? tr("None") : tr("Date")));
         if (t.id == want) selectRow = row;
     }
     if (table_->rowCount() > 0) table_->setCurrentCell(selectRow, 0);
@@ -380,7 +385,8 @@ void TemplatesDialog::importTemplates()
     for (const DocumentTemplate& t : parsed.templates) {
         const DocumentTemplate* mine = sameName(t);
         if (!mine) toAdd.push_back(&t);
-        else if (mine->pattern == t.pattern && mine->allowPeriod == t.allowPeriod && mine->useDate == t.useDate) ++identical;
+        else if (mine->pattern == t.pattern && mine->useDate == t.useDate &&
+                 mine->spaceAfterDate == t.spaceAfterDate) ++identical;
         else differing.emplace_back(mine, t);
     }
 

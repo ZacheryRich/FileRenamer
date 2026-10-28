@@ -32,8 +32,8 @@ struct DocumentTemplate {
     std::int64_t id = 0;    // 0 = not saved yet
     std::string name;       // shown in the Type list, e.g. "Email"
     std::string pattern;
-    bool allowPeriod = false;  // offer a period (date range) as well as a single date
     bool useDate = true;       // start the name with a date; false = no date box, no date in the name
+    bool spaceAfterDate = true;  // a space between the date and the rest; false = attached (2026.01.31Email...)
 };
 
 struct TemplateField {
@@ -107,19 +107,6 @@ std::string buildDocumentFilename(const DocumentInfo& info, const std::optional<
 // complete). `dateMissing` adds the date to the list (ignored when the kind uses no date). Statement kind is never
 // complete here: it is named from an account.
 std::optional<std::string> documentMissing(const DocumentInfo& info, bool dateMissing = false);
-
-// Which dates a kind accepts: a template a single date (or a period too if it allows it);
-// Other a single date or a period; statements anything. Returns an error message,
-// or nullopt if the date is allowed.
-std::optional<std::string> validateDocumentDate(const DocumentInfo& info, const DateSpec& date);
-
-// The single-date / period / quarter choices a kind offers.
-struct DateModes {
-    bool single = true;
-    bool period = true;
-    bool quarter = true;
-};
-DateModes allowedDateModes(const DocumentInfo& info);
 
 // The fields of a Template row that carry-forward leaves blank (the optional ones).
 void clearOptionalFields(DocumentInfo& info);

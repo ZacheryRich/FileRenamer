@@ -111,7 +111,7 @@ window's **Add Examples** button creates Email, Text, Text Conversation, Group T
 for them). Every name starts with the date in the same `YYYY.MM.DD` format; everything after it
 is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a pattern.
 
-- **Template** = name + **pattern** + "allow a period" flag (`DocumentTemplate`; stored in the
+- **Template** = name + **pattern** + date options (`DocumentTemplate`; stored in the
   database, table `document_templates`, schema v8, shared by all cases). Pattern syntax (the
   date is never written in it; always added in front):
   `Email from {Sender} to {Recipient}[ ({Description})]`
@@ -122,13 +122,18 @@ is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a
   - `\[ \] \{ \} \\` = literal characters; everything else is fixed text.
   - **"Start the name with a date" checkbox** (template editor, objectName "useDate", default on;
     `DocumentTemplate::useDate`, column `use_date`, schema v9): off = no date box on the rename
-    screen and no date in the name (`Photo of the car.pdf`); the "allow a period" box is then
-    disabled. A template that can print nothing (all parts optional, none filled) is flagged
+    screen and no date in the name (`Photo of the car.pdf`). A template that can print nothing (all parts optional, none filled) is flagged
     "Needs a name". `documentUsesDate(info)` is the one place that decides.
+  - **"Put a space after the date" checkbox** (template editor, objectName "spaceAfterDate", default on;
+    `DocumentTemplate::spaceAfterDate`, column `space_after_date`, schema v10; disabled when the date is
+    off): off = the template's text follows the date directly (`2026.01.31Email...`; the user can start
+    the pattern with `_` or ` - `). Templates only -- Other files and statements always have the space.
+    Also in the XML export/import (`spaceAfterDate`, missing = space).
   - Template names are unique ignoring case and can't be "Statement" or "Other".
     `validatePattern` / `validateTemplate` give user-facing error messages (Database throws
-    `DatabaseError` with them). Dates: single date always, a period only if "allow a period" is
-    ticked; **quarters are statements only**; month/day stay optional (see Date modes).
+    `DatabaseError` with them). Dates: **every kind (statement, template, Other) offers single date, period and quarter**
+    (the old "allow a period" tick box was removed; the `allow_period` DB column is left unused,
+    XML import ignores an old `allowPeriod` attribute); month/day stay optional (see Date modes).
   - Boxes on the screen are built from the pattern (`RenameWindow::syncFieldEdits`; objectNames
     `field_<name with spaces as _, lower case>`, e.g. "field_sender"). Choosing a template puts the
     cursor in its first box. Boxes are **kept (not rebuilt) when the next file uses the same
@@ -139,7 +144,7 @@ is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a
   - **Templates... button** (objectName "templates") beside the Type dropdown opens
     `TemplatesDialog` (table "templates"; buttons addTemplate, editTemplate, duplicateTemplate,
     deleteTemplate, addExamples, close; editor fields "templateName", "templatePattern",
-    "allowPeriod" with a live example and error text). Changes save at once. Rows on screen that
+    "useDate", "spaceAfterDate" with a live example and error text). Changes save at once. Rows on screen that
     aren't renamed yet are updated (`RenameSession::refreshTemplates`): an edited template applies
     to them keeping typed text; a deleted one turns the row into an **Other** with the name it had
     (or back to a blank statement row if nothing was typed).
@@ -150,11 +155,11 @@ is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a
     templates whose pattern differs. Folder remembered as `templates/lastDir`.
   - A row stores a **copy** of its template (`DocumentInfo::tmpl`), so core needs no database.
 - **Other** (kept for one-off files): `[Date] [Label] ([Description])`; the label is required,
-  the description optional (its parentheses drop out when blank); single date or period. The date
+  the description optional (its parentheses drop out when blank); any date mode. The date
   is **optional per file**: the "Start the name with a date" checkbox (objectName "includeDate",
   checked by default, `DocumentInfo::noDate`) turns it off for that file (name = `Label (Description)`);
   carry-forward copies the setting.
-- Quarters are for statements only; **month and day are optional for every kind** (see Date modes). Dates beyond what a kind offers are rejected (`validateDocumentDate`).
+- Quarter and period are available for every kind (`2026.Q1` etc.); **month and day are optional for every kind** (see Date modes).
 - **Folder sorting is for statements only** (user's rule): template and Other files
   get neither account nor year folders -- they are renamed where they are (`buildPlan` uses the
   source folder for them). Their "Into folder" cell reads grey "(stays here)".
@@ -474,7 +479,7 @@ component list comes from the Linux Qt 6.12.0 build's SBOM, not the user's Windo
       NoticesDialog         Licences...: shows THIRD-PARTY-NOTICES.txt (compiled-in resource)
       QtHelpers.h           qstr/stdstr/toPath/qpath, settingsFile, personLabel,
                             disconnectChildren, runGuarded
-    tests/                  Catch2 v3 (169 tests): core + Database + RenameSession + NameFixer + BatesSheet + DocumentName + Vacation + PdfUnlock
+    tests/                  Catch2 v3 (171 tests): core + Database + RenameSession + NameFixer + BatesSheet + DocumentName + Vacation + PdfUnlock
     installer/FinRenamer.iss  Inno Setup script
 
 Dependencies: Qt 6.12 (Widgets, optional Pdf/PdfWidgets), SQLiteCpp 3.3.3, OpenXLSX
@@ -493,7 +498,7 @@ Also qpdf 12.2.0 + zlib + libjpeg-turbo (PDF Unlocker; see that section). Only c
 - **Schema changes**: append a new entry to `kMigrations` in `Database.cpp` and bump
   `kSchemaVersion`; never edit a shipped migration. Add a test that upgrades a
   database in the previous format (see "A version 1 database is upgraded").
-  Current schema version: **9** (v9 document_templates.use_date; v8 document_templates; v7 combined_parts replaced combined_members; v2 added people.display_name, v3 added
+  Current schema version: **10** (v10 document_templates.space_after_date; v9 document_templates.use_date; v8 document_templates; v7 combined_parts replaced combined_members; v2 added people.display_name, v3 added
   accounts.institution_display, v4 added account_previous_numbers and
   account_name_history, v5 added accounts.is_combined and combined_members, v6 added
   accounts.opened_on and closed_on, "YYYY-MM-DD" or empty).
@@ -523,8 +528,21 @@ Also qpdf 12.2.0 + zlib + libjpeg-turbo (PDF Unlocker; see that section). Only c
   "editAccount", "singleDate" (its boxes "year", "month", "day"), "quarter", "quarterYear", "mode", "skip", "next", "apply", "undo",
   "summary", "byAccount", "byYear", "preview", and for the file types "kind", "templates", "label" and
   "description" and "includeDate" (Other), "field_<name>" (a template's boxes)) for automated GUI tests.
+- **Separate tool windows** (user's request): every tile opens its tool as its own top-level
+  window (no parent, own taskbar entry), so several can be open at once; **one window per tool**
+  (clicking an open tool's tile raises it; `HomeWindow::showTool` with a `QPointer` per tool, built
+  with `WA_DeleteOnClose`). File Renamer and Deficiency List therefore work on one case at a time
+  (close and reopen to switch). The **start screen stays open** and is never hidden; closing it asks
+  "N tool(s) are still open. Close them and exit?" and, on Yes, closes each tool (their own
+  unsaved-changes questions still apply; if one stays open the exit is cancelled). The Case List's
+  File Renamer / Deficiency List buttons emit `fileRenamerRequested` / `deficiencyListRequested`
+  (HomeWindow opens them for that case, no picker); when the renamer closes the Case List refreshes
+  (`refreshAfterTool`). Popups inside a tool must block only their own window: `ui::WindowModalFilter`
+  (installed on the QApplication in `main.cpp`) turns any parented dialog's application modality into
+  window modality just before it is shown, so `exec()` calls stay as they are. Update File Names stays
+  a modal child of the Case List. Native Windows file pickers are unverified.
 - **Start screen** (`HomeWindow`, what `main.cpp` shows): six tiles -- **Case List**
-  (opens `MainWindow`, hiding the start screen until it's closed), **File Renamer** (the
+  (opens `MainWindow`; the start screen stays open), **File Renamer** (the
   rename screen; the program's name for it is "File Renamer", not "Rename Files") and
   **Deficiency List**, **Bates Log**, **Vacation Letters** and **PDF Unlocker**; File Renamer and Deficiency List ask which case via `CasePickerDialog` (last case
   preselected). Closing the start screen quits the app (`quitOnLastWindowClosed` is off).

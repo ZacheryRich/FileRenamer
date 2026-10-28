@@ -633,14 +633,11 @@ void MainWindow::deleteAccount()
 
 void MainWindow::renameFiles()
 {
-    const auto caseId = currentCaseId();
-    if (!caseId) return;
+    if (const auto caseId = currentCaseId()) emit fileRenamerRequested(*caseId);
+}
 
-    RenameWindow window(db_, *caseId, this);
-    if (!window.promptForFolder()) return;
-    window.exec();
-
-    // Accounts or people may have been added from the rename screen.
+void MainWindow::refreshAfterTool()
+{
     reloadPeople();
     reloadAccounts();
     updateButtons();
@@ -664,11 +661,7 @@ void MainWindow::offerNameUpdate(const std::set<std::string>& namesBefore)
 
 void MainWindow::deficiencyList()
 {
-    const auto caseId = currentCaseId();
-    if (!caseId) return;
-    DeficiencyDialog dialog(db_, *caseId, this);
-    if (!dialog.hasFolders() && !dialog.promptForFolder()) return;
-    dialog.exec();
+    if (const auto caseId = currentCaseId()) emit deficiencyListRequested(*caseId);
 }
 
 void MainWindow::updateFileNames()

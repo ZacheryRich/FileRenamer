@@ -106,8 +106,28 @@ HomeWindow::~HomeWindow()
 
 void HomeWindow::closeEvent(QCloseEvent* event)
 {
+    // The tools are separate windows; closing the start screen ends the program, so ask first.
+    const QList<QPointer<QWidget>> open = openTools();
+    if (!open.isEmpty()) {
+        const auto answer = QMessageBox::question(
+            this, appTitle(),
+            tr("%n tool(s) are still open. Close them and exit?", nullptr, static_cast<int>(open.size())),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) {
+            event->ignore();
+            return;
+        }
+        for (const QPointer<QWidget>& tool : open)
+            if (tool) tool->close();  // each tool's own "unsaved changes?" question still applies
+        for (const QPointer<QWidget>& tool : open) {
+            if (tool && tool->isVisible()) {  // the user kept one open
+                event->ignore();
+                return;
+            }
+        }
+    }
     QMainWindow::closeEvent(event);
-    if (event->isAccepted()) QApplication::quit();  // the Case List may be hiding this window, not closing it
+    if (event->isAccepted()) QApplication::quit();
 }
 
 std::optional<std::int64_t> HomeWindow::chooseCase(const QString& purpose)
@@ -117,51 +137,91 @@ std::optional<std::int64_t> HomeWindow::chooseCase(const QString& purpose)
     return picker.selectedCaseId();
 }
 
+QList<QPointer<QWidget>> HomeWindow::openTools() const
+{
+    QList<QPointer<QWidget>> open;
+    for (const QPointer<QWidget>& tool : {caseList_, renamer_, deficiency_, bates_, vacation_, unlocker_})
+        if (tool && tool->isVisible()) open.append(tool);
+    return open;
+}
+
+void HomeWindow::showTool(QPointer<QWidget>& slot, const std::function<QWidget*()>& make)
+{
+    if (slot && slot->isVisible()) {  // already open: bring it forward
+        if (slot->isMinimized()) slot->setWindowState(slot->windowState() & ~Qt::WindowMinimized);
+        slot->raise();
+        slot->activateWindow();
+        return;
+    }
+    delete slot.data();  // closed but not yet cleaned up
+    QWidget* tool = make();
+    if (!tool) return;
+    slot = tool;
+    tool->setAttribute(Qt::WA_DeleteOnClose);
+    tool->show();
+    tool->raise();
+    tool->activateWindow();
+}
+
 void HomeWindow::openCaseList()
 {
-    auto* window = new MainWindow(db_, dataFolder_);
-    window->setAttribute(Qt::WA_DeleteOnClose);
-    // Back to the start screen when the Case List is closed.
-    connect(window, &QObject::destroyed, this, [this] {
-        show();
-        activateWindow();
+    showTool(caseList_, [this]() -> QWidget* {
+        auto* window = new MainWindow(db_, dataFolder_);
+        connect(window, &MainWindow::fileRenamerRequested, this, &HomeWindow::openFileRenamerFor);
+        connect(window, &MainWindow::deficiencyListRequested, this, &HomeWindow::openDeficiencyListFor);
+        return window;
     });
-    hide();
-    window->show();
 }
 
-void HomeWindow::openFileRenamer()
+void HomeWindow::openFileRenamer() { openFileRenamerImpl(std::nullopt); }
+void HomeWindow::openFileRenamerFor(std::int64_t caseId) { openFileRenamerImpl(caseId); }
+
+void HomeWindow::openFileRenamerImpl(std::optional<std::int64_t> caseId)
 {
-    const auto caseId = chooseCase(tr("File Renamer"));
-    if (!caseId) return;
-    RenameWindow window(db_, *caseId, this);
-    if (!window.promptForFolder()) return;
-    window.exec();
+    showTool(renamer_, [this, caseId]() -> QWidget* {
+        const auto id = caseId ? caseId : chooseCase(tr("File Renamer"));
+        if (!id) return nullptr;
+        auto* window = new RenameWindow(db_, *id);
+        if (!window->promptForFolder()) {
+            delete window;
+            return nullptr;
+        }
+        // Accounts or people may have been added from the rename screen: refresh the Case List.
+        connect(window, &QObject::destroyed, this, [this] {
+            if (auto* list = qobject_cast<MainWindow*>(caseList_.data())) list->refreshAfterTool();
+        });
+        return window;
+    });
 }
 
-void HomeWindow::openDeficiencyList()
+void HomeWindow::openDeficiencyList() { openDeficiencyListImpl(std::nullopt); }
+void HomeWindow::openDeficiencyListFor(std::int64_t caseId) { openDeficiencyListImpl(caseId); }
+
+void HomeWindow::openDeficiencyListImpl(std::optional<std::int64_t> caseId)
 {
-    const auto caseId = chooseCase(tr("Deficiency List"));
-    if (!caseId) return;
-    DeficiencyDialog dialog(db_, *caseId, this);
-    if (!dialog.hasFolders() && !dialog.promptForFolder()) return;
-    dialog.exec();
+    showTool(deficiency_, [this, caseId]() -> QWidget* {
+        const auto id = caseId ? caseId : chooseCase(tr("Deficiency List"));
+        if (!id) return nullptr;
+        auto* dialog = new DeficiencyDialog(db_, *id);
+        if (!dialog->hasFolders() && !dialog->promptForFolder()) {
+            delete dialog;
+            return nullptr;
+        }
+        return dialog;
+    });
 }
 
 void HomeWindow::openBatesLog()
 {
-    BatesDialog dialog(this);
-    dialog.exec();
+    showTool(bates_, [] { return new BatesDialog; });
 }
 
 void HomeWindow::openVacationLetters()
 {
-    VacationDialog dialog(this);
-    dialog.exec();
+    showTool(vacation_, [] { return new VacationDialog; });
 }
 
 void HomeWindow::openPdfUnlocker()
 {
-    UnlockDialog dialog(this);
-    dialog.exec();
+    showTool(unlocker_, [] { return new UnlockDialog; });
 }

@@ -15,7 +15,7 @@ namespace finrenamer {
 
 namespace {
 
-constexpr int kSchemaVersion = 9;
+constexpr int kSchemaVersion = 10;
 
 // Each entry upgrades the schema by one version. Never edit a shipped entry;
 // add a new one instead, so existing databases upgrade in place.
@@ -173,6 +173,11 @@ const char* const kMigrations[] = {
     // Version 9: a template can leave the date out of the name.
     R"sql(
     ALTER TABLE document_templates ADD COLUMN use_date INTEGER NOT NULL DEFAULT 1;
+    )sql",
+
+    // Version 10: a template can attach its text straight to the date (no space between).
+    R"sql(
+    ALTER TABLE document_templates ADD COLUMN space_after_date INTEGER NOT NULL DEFAULT 1;
     )sql",
 };
 
@@ -920,7 +925,7 @@ std::string trimmedName(const std::string& s)
 std::vector<DocumentTemplate> Database::listTemplates() const
 {
     SQLite::Statement q(impl_->db,
-        "SELECT id, name, pattern, allow_period, use_date FROM document_templates ORDER BY name COLLATE NOCASE, id");
+        "SELECT id, name, pattern, use_date, space_after_date FROM document_templates ORDER BY name COLLATE NOCASE, id");
     std::vector<DocumentTemplate> out;
     while (q.executeStep())
         out.push_back({q.getColumn(0).getInt64(), q.getColumn(1).getString(), q.getColumn(2).getString(),
@@ -942,11 +947,11 @@ static void checkTemplate(SQLite::Database& db, const DocumentTemplate& t, std::
 std::int64_t Database::createTemplate(const DocumentTemplate& t)
 {
     checkTemplate(impl_->db, t, 0);
-    SQLite::Statement q(impl_->db, "INSERT INTO document_templates (name, pattern, allow_period, use_date) VALUES (?, ?, ?, ?)");
+    SQLite::Statement q(impl_->db, "INSERT INTO document_templates (name, pattern, use_date, space_after_date) VALUES (?, ?, ?, ?)");
     q.bind(1, trimmedName(t.name));
     q.bind(2, t.pattern);
-    q.bind(3, t.allowPeriod ? 1 : 0);
-    q.bind(4, t.useDate ? 1 : 0);
+    q.bind(3, t.useDate ? 1 : 0);
+    q.bind(4, t.spaceAfterDate ? 1 : 0);
     q.exec();
     return impl_->db.getLastInsertRowid();
 }
@@ -954,11 +959,11 @@ std::int64_t Database::createTemplate(const DocumentTemplate& t)
 void Database::updateTemplate(const DocumentTemplate& t)
 {
     checkTemplate(impl_->db, t, t.id);
-    SQLite::Statement q(impl_->db, "UPDATE document_templates SET name = ?, pattern = ?, allow_period = ?, use_date = ? WHERE id = ?");
+    SQLite::Statement q(impl_->db, "UPDATE document_templates SET name = ?, pattern = ?, use_date = ?, space_after_date = ? WHERE id = ?");
     q.bind(1, trimmedName(t.name));
     q.bind(2, t.pattern);
-    q.bind(3, t.allowPeriod ? 1 : 0);
-    q.bind(4, t.useDate ? 1 : 0);
+    q.bind(3, t.useDate ? 1 : 0);
+    q.bind(4, t.spaceAfterDate ? 1 : 0);
     q.bind(5, t.id);
     if (q.exec() == 0) throw DatabaseError("That template no longer exists.");
 }
