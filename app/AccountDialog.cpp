@@ -11,11 +11,13 @@
 #include <QTableWidget>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QVariantList>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <set>
 
 #include "DateWidgets.h"
@@ -47,6 +49,50 @@ void addOwnerItem(QListWidget* list, const Person& p)
     item->setData(kIdRole, QVariant::fromValue<qlonglong>(p.id));
     item->setData(kDisplayRole, qstr(p.displayName));
 }
+
+// "Who owns this account?" for one account on a combined statement: tick people; their names
+// appear in the file name in the order they were ticked.
+class PartOwnersDialog : public QDialog {
+public:
+    PartOwnersDialog(const std::vector<Person>& people, const std::vector<std::int64_t>& current, const QString& what,
+                     QWidget* parent)
+        : QDialog(parent), order_(current)
+    {
+        setWindowTitle(QObject::tr("Owners of %1").arg(what));
+        list_ = new QListWidget;
+        list_->setObjectName("partOwnerList");
+        for (const Person& p : people) {
+            auto* item = new QListWidgetItem(personLabel(p), list_);
+            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+            item->setData(kIdRole, QVariant::fromValue<qlonglong>(p.id));
+            item->setCheckState(std::find(current.begin(), current.end(), p.id) != current.end() ? Qt::Checked : Qt::Unchecked);
+        }
+        auto* hint = new QLabel(QObject::tr("Tick who owns this account. Names appear in the file name in the order you tick them. "
+                                            "Leave all unticked for no owner."));
+        hint->setWordWrap(true);
+        hint->setStyleSheet("color: palette(placeholder-text);");
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        auto* layout = new QVBoxLayout(this);
+        layout->addWidget(hint);
+        layout->addWidget(list_);
+        layout->addWidget(buttons);
+        connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+        connect(list_, &QListWidget::itemChanged, this, [this](QListWidgetItem* item) {
+            const std::int64_t id = item->data(kIdRole).toLongLong();
+            const auto it = std::find(order_.begin(), order_.end(), id);
+            if (item->checkState() == Qt::Checked && it == order_.end()) order_.push_back(id);
+            if (item->checkState() != Qt::Checked && it != order_.end()) order_.erase(it);
+        });
+        resize(360, 300);
+    }
+    ~PartOwnersDialog() override { disconnectChildren(this); }
+    std::vector<std::int64_t> owners() const { return order_; }
+
+private:
+    QListWidget* list_ = nullptr;
+    std::vector<std::int64_t> order_;
+};
 }
 
 AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
@@ -140,9 +186,9 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
     form->addRow(QString(), datesBox);
 
     // ---- Combined statement: the accounts on it, typed, in name order ----
-    parts_ = new QTableWidget(0, 2);
+    parts_ = new QTableWidget(0, 3);
     parts_->setObjectName("parts");
-    parts_->setHorizontalHeaderLabels({tr("Account type (optional)"), tr("Number (last four)")});
+    parts_->setHorizontalHeaderLabels({tr("Account type (optional)"), tr("Number (last four)"), tr("Owners (double-click)")});
     parts_->horizontalHeader()->setStretchLastSection(true);
     parts_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     parts_->verticalHeader()->hide();
@@ -155,8 +201,12 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
     removePartBtn_->setObjectName("removePart");
     partUpBtn_ = new QPushButton(tr("Move Up"));
     partDownBtn_ = new QPushButton(tr("Move Down"));
+    partOwnersBtn_ = new QPushButton(tr("Owners..."));
+    partOwnersBtn_->setObjectName("partOwners");
+    partOwnersBtn_->setToolTip(tr("Choose who owns the selected account"));
     auto* partButtons = new QVBoxLayout;
     partButtons->addWidget(addPartBtn);
+    partButtons->addWidget(partOwnersBtn_);
     partButtons->addWidget(partUpBtn_);
     partButtons->addWidget(partDownBtn_);
     partButtons->addWidget(removePartBtn_);
@@ -168,7 +218,9 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
 
     auto* partsHint = new QLabel(tr("The accounts on this statement, in the order they appear in the "
                                     "name, e.g. Checking 1111, Savings 2222. Just type them; they don't "
-                                    "need to be saved as accounts. At least two."));
+                                    "need to be saved as accounts. At least two. Each account has its own "
+                                    "owners (double-click the Owners cell); accounts with the same owners "
+                                    "are grouped in the name, e.g. Chk x1111, Sav x2222 (W), Chk x3333 (H)."));
     partsHint->setWordWrap(true);
     partsHint->setStyleSheet("color: palette(placeholder-text);");
 
@@ -206,7 +258,8 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
     auto* ownersHint = new QLabel(tr("Names appear in the filename in this order. Optional."));
     ownersHint->setStyleSheet("color: palette(placeholder-text);");
 
-    auto* ownersBox = new QGroupBox(tr("Owners"));
+    ownersBox_ = new QGroupBox(tr("Owners"));
+    auto* ownersBox = ownersBox_;
     auto* ownersLayout = new QVBoxLayout(ownersBox);
     ownersLayout->addWidget(ownersHint);
     ownersLayout->addLayout(ownerRow);
@@ -239,8 +292,10 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
 
     // ---- Fill in an existing account ----
     if (editingCombined) {
-        for (const CombinedPart& p : existing_->parts) addPart(qstr(p.accountType), qstr(p.lastFour));
+        loadPeople();
+        for (const CombinedPart& p : existing_->parts) addPart(qstr(p.accountType), qstr(p.lastFour), p.ownerIds);
     } else if (!existing_) {
+        loadPeople();
         addPart();
         addPart();  // a new statement starts with two empty rows
     }
@@ -273,6 +328,10 @@ AccountDialog::AccountDialog(Database& db, std::int64_t caseId,
     connect(parts_, &QTableWidget::currentCellChanged, this, &AccountDialog::updateState);
     connect(parts_, &QTableWidget::itemChanged, this, &AccountDialog::updateState);
     connect(removePartBtn_, &QPushButton::clicked, this, &AccountDialog::removePart);
+    connect(partOwnersBtn_, &QPushButton::clicked, this, [this] { editPartOwners(parts_->currentRow()); });
+    connect(parts_, &QTableWidget::cellDoubleClicked, this, [this](int row, int column) {
+        if (column == 2) editPartOwners(row);
+    });
     connect(partUpBtn_, &QPushButton::clicked, this, [this] { movePart(-1); });
     connect(partDownBtn_, &QPushButton::clicked, this, [this] { movePart(+1); });
     connect(buttons_, &QDialogButtonBox::accepted, this, &AccountDialog::accept);
@@ -313,19 +372,72 @@ void AccountDialog::updateKind()
 {
     singlePage_->setVisible(!isCombined());
     combinedPage_->setVisible(isCombined());
+    ownersBox_->setVisible(!isCombined());
     if (!existing_) setWindowTitle(isCombined() ? tr("New Combined Statement") : tr("New Account"));
     updateState();
 }
 
-void AccountDialog::addPart(const QString& type, const QString& number)
+void AccountDialog::addPart(const QString& type, const QString& number, const std::vector<std::int64_t>& owners)
 {
     const QSignalBlocker block(parts_);
     const int row = parts_->rowCount();
+    // A new account starts with the owners of the one above it: they are usually the same.
+    const bool fresh = type.isEmpty() && number.isEmpty() && owners.empty();
+    const std::vector<std::int64_t> initial = fresh && row > 0 ? partOwners(row - 1) : owners;
     parts_->insertRow(row);
     parts_->setItem(row, 0, new QTableWidgetItem(type));
     parts_->setItem(row, 1, new QTableWidgetItem(number));
+    auto* ownersItem = new QTableWidgetItem;
+    ownersItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+    parts_->setItem(row, 2, ownersItem);
+    setPartOwners(row, initial);
     parts_->setCurrentCell(row, 0);
     if (isVisible()) parts_->editItem(parts_->item(row, 0));
+    updateState();
+}
+
+void AccountDialog::loadPeople()
+{
+    people_.clear();
+    runGuarded(this, [&] {
+        for (const auto& p : db_.listPeople(caseId_)) people_[p.id] = p;
+    });
+}
+
+void AccountDialog::setPartOwners(int row, const std::vector<std::int64_t>& ids)
+{
+    QTableWidgetItem* item = parts_->item(row, 2);
+    if (!item) return;
+    QVariantList list;
+    QStringList names;
+    for (const auto id : ids) {
+        list << QVariant::fromValue<qlonglong>(id);
+        const auto it = people_.find(id);
+        if (it != people_.end()) names << qstr(it->second.displayName);
+    }
+    item->setData(Qt::UserRole, list);
+    item->setText(names.isEmpty() ? tr("(none)") : names.join(QStringLiteral("; ")));
+}
+
+std::vector<std::int64_t> AccountDialog::partOwners(int row) const
+{
+    std::vector<std::int64_t> ids;
+    if (QTableWidgetItem* item = parts_->item(row, 2))
+        for (const QVariant& v : item->data(Qt::UserRole).toList()) ids.push_back(v.toLongLong());
+    return ids;
+}
+
+void AccountDialog::editPartOwners(int row)
+{
+    if (row < 0 || row >= parts_->rowCount()) return;
+    std::vector<Person> people;
+    for (const auto& [id, person] : people_) people.push_back(person);
+    const QString type = parts_->item(row, 0) ? parts_->item(row, 0)->text().trimmed() : QString();
+    const QString number = parts_->item(row, 1) ? parts_->item(row, 1)->text().trimmed() : QString();
+    const QString what = (type + (number.isEmpty() ? QString() : QStringLiteral(" x") + number)).trimmed();
+    PartOwnersDialog dialog(people, partOwners(row), what.isEmpty() ? tr("this account") : what, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    setPartOwners(row, dialog.owners());
     updateState();
 }
 
@@ -343,7 +455,7 @@ void AccountDialog::movePart(int delta)
     const int target = row + delta;
     if (row < 0 || target < 0 || target >= parts_->rowCount()) return;
     const QSignalBlocker block(parts_);
-    for (int col = 0; col < 2; ++col) {
+    for (int col = 0; col < 3; ++col) {
         QTableWidgetItem* a = parts_->takeItem(row, col);
         QTableWidgetItem* b = parts_->takeItem(target, col);
         parts_->setItem(row, col, b);
@@ -361,7 +473,12 @@ std::vector<CombinedPart> AccountDialog::parts() const
         const QString type = parts_->item(row, 0) ? parts_->item(row, 0)->text().trimmed() : QString();
         const QString number = parts_->item(row, 1) ? parts_->item(row, 1)->text().trimmed() : QString();
         if (type.isEmpty() && number.isEmpty()) continue;
-        out.push_back({stdstr(type), stdstr(number)});
+        CombinedPart part{stdstr(type), stdstr(number), {}, partOwners(row)};
+        for (const auto id : part.ownerIds) {
+            const auto it = people_.find(id);
+            if (it != people_.end()) part.owners.push_back(it->second.displayName);
+        }
+        out.push_back(std::move(part));
     }
     return out;
 }
@@ -440,6 +557,7 @@ Account AccountDialog::currentAccount() const
     a.institution = stdstr(institution_->text());
     a.institutionDisplay = stdstr(institutionDisplay_->text().trimmed());
     if (isCombined()) {
+        a.owners.clear();  // the accounts on it carry the owners
         a.combined = parts();
         return a;
     }
@@ -535,6 +653,7 @@ void AccountDialog::updateState()
     partUpBtn_->setEnabled(partRow > 0);
     partDownBtn_->setEnabled(partRow >= 0 && partRow < parts_->rowCount() - 1);
     removePartBtn_->setEnabled(partRow >= 0);
+    partOwnersBtn_->setEnabled(partRow >= 0);
 
     const Account a = currentAccount();
     const bool valid = !validateAccount(a);
@@ -566,9 +685,12 @@ void AccountDialog::accept()
     AccountRecord r;
     r.id = existing_ ? existing_->id : 0;
     r.caseId = caseId_;
-    for (int i = 0; i < owners_->count(); ++i)
-        r.ownerIds.push_back(owners_->item(i)->data(kIdRole).toLongLong());
-    if (isCombined()) r.parts = parts();
+    if (!isCombined()) {
+        for (int i = 0; i < owners_->count(); ++i)
+            r.ownerIds.push_back(owners_->item(i)->data(kIdRole).toLongLong());
+    } else {
+        r.parts = parts();  // a combined statement's owners belong to its accounts
+    }
     r.institution = stdstr(institution_->text());
     r.institutionDisplay = stdstr(institutionDisplay_->text());
     r.accountType = stdstr(type_->text());

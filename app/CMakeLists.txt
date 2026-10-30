@@ -21,6 +21,7 @@ qt_add_library(finrenamer_ui STATIC
     UpdateNamesDialog.h UpdateNamesDialog.cpp
     VacationDialog.h VacationDialog.cpp
     UnlockDialog.h UnlockDialog.cpp
+    SplitDialog.h SplitDialog.cpp
     NoticesDialog.h NoticesDialog.cpp
     SignaturesDialog.h SignaturesDialog.cpp
     TemplatesDialog.h TemplatesDialog.cpp

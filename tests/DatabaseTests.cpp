@@ -35,13 +35,13 @@ TEST_CASE("A new database is created at the current schema version")
     const fs::path file = dir.path() / "finrenamer.db";
     {
         Database db(file);
-        CHECK(db.schemaVersion() == 10);
+        CHECK(db.schemaVersion() == 11);
         db.createCase({0, "Persisted", ""});
     }
     CHECK(fs::exists(file));
 
     Database reopened(file);  // reopening must not re-run migrations
-    CHECK(reopened.schemaVersion() == 10);
+    CHECK(reopened.schemaVersion() == 11);
     REQUIRE(reopened.listCases().size() == 1);
     CHECK(reopened.listCases()[0].clientName == "Persisted");
 }
@@ -330,7 +330,7 @@ TEST_CASE("A version 1 database is upgraded and keeps its data")
     }
 
     Database db(file);
-    CHECK(db.schemaVersion() == 10);
+    CHECK(db.schemaVersion() == 11);
     const auto people = db.listPeople(1);
     REQUIRE(people.size() == 1);
     CHECK(people[0].displayName == "José Núñez");
@@ -567,11 +567,12 @@ TEST_CASE("A version 4 database is upgraded to combined statements")
             INSERT INTO accounts (id, case_id, institution, account_type, last_four, institution_display)
                 VALUES (1, 1, 'Chase', 'Checking', '1234', 'Chase');
             DROP TABLE IF EXISTS document_templates;
+            DROP TABLE IF EXISTS combined_part_owners;
             PRAGMA user_version = 4;
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 10);
+    CHECK(db.schemaVersion() == 11);
     REQUIRE(db.loadAccounts(1).size() == 1);
     CHECK_FALSE(db.loadAccounts(1)[0].isCombined());
     AccountRecord c;
@@ -608,11 +609,12 @@ TEST_CASE("A version 6 database keeps its combined statements, now with typed pa
                 VALUES (3, 1, '', '', '', '', 1);
             INSERT INTO combined_members VALUES (3, 2, 0), (3, 1, 1);
             DROP TABLE IF EXISTS document_templates;
+            DROP TABLE IF EXISTS combined_part_owners;
             PRAGMA user_version = 6;
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 10);
+    CHECK(db.schemaVersion() == 11);
     const auto accounts = db.loadAccounts(1);
     REQUIRE(accounts.size() == 3);
     const Account& combined = accounts.back();
@@ -685,11 +687,12 @@ TEST_CASE("A version 5 database is upgraded to opening and closing dates")
             INSERT INTO accounts (id, case_id, institution, account_type, last_four, institution_display, is_combined)
                 VALUES (1, 1, 'Chase', 'Checking', '1234', 'Chase', 0);
             DROP TABLE IF EXISTS document_templates;
+            DROP TABLE IF EXISTS combined_part_owners;
             PRAGMA user_version = 5;
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 10);
+    CHECK(db.schemaVersion() == 11);
     auto r = *db.getAccount(1);
     CHECK_FALSE(r.openedOn);
     CHECK_FALSE(r.closedOn);
@@ -760,12 +763,13 @@ TEST_CASE("A version 7 database is upgraded and gets an empty template list")
         SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
         old.exec(R"sql(
             DROP TABLE document_templates;
+            DROP TABLE combined_part_owners;
             INSERT INTO cases (id, client_name) VALUES (1, 'Old Case');
             PRAGMA user_version = 7;
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 10);
+    CHECK(db.schemaVersion() == 11);
     CHECK(db.getCase(1).has_value());
     CHECK(db.listTemplates().empty());
     CHECK_NOTHROW(db.createTemplate({0, "Letter", "Ltr from {Sender}"}));
@@ -791,6 +795,7 @@ TEST_CASE("Templates can leave the date out, and a version 8 database gets that 
         SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
         old.exec(R"sql(
             DROP TABLE document_templates;
+            DROP TABLE combined_part_owners;
             CREATE TABLE document_templates (id INTEGER PRIMARY KEY, name TEXT NOT NULL, pattern TEXT NOT NULL,
                                              allow_period INTEGER NOT NULL DEFAULT 0);
             INSERT INTO document_templates (name, pattern, allow_period) VALUES ('Email', 'Email from {A}', 1);
@@ -798,7 +803,7 @@ TEST_CASE("Templates can leave the date out, and a version 8 database gets that 
         )sql");
     }
     Database upgraded(file);
-    CHECK(upgraded.schemaVersion() == 10);
+    CHECK(upgraded.schemaVersion() == 11);
     REQUIRE(upgraded.listTemplates().size() == 1);
     CHECK(upgraded.listTemplates()[0].useDate);  // existing templates keep their date
 }
@@ -817,11 +822,12 @@ TEST_CASE("Upgrading an older database first leaves a backup copy beside it")
     {
         SQLite::Database raw(utf8FromPath(dbFile), SQLite::OPEN_READWRITE);
         raw.exec("DROP TABLE document_templates");
+        raw.exec("DROP TABLE combined_part_owners");
         raw.exec("PRAGMA user_version = 7");
     }
     {
         Database db(dbFile);
-        CHECK(db.schemaVersion() == 10);
+        CHECK(db.schemaVersion() == 11);
         CHECK(db.listCases().size() == 1);
     }
     const fs::path backup = data.path() / "finrenamer.db.backup-v7";
@@ -870,6 +876,7 @@ TEST_CASE("Templates can attach to the date, and a version 9 database gets that 
         SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
         old.exec(R"sql(
             DROP TABLE document_templates;
+            DROP TABLE combined_part_owners;
             CREATE TABLE document_templates (id INTEGER PRIMARY KEY, name TEXT NOT NULL, pattern TEXT NOT NULL,
                                              allow_period INTEGER NOT NULL DEFAULT 0, use_date INTEGER NOT NULL DEFAULT 1);
             INSERT INTO document_templates (name, pattern, allow_period, use_date) VALUES ('Email', 'Email from {A}', 1, 1);
@@ -877,8 +884,86 @@ TEST_CASE("Templates can attach to the date, and a version 9 database gets that 
         )sql");
     }
     Database upgraded(file);
-    CHECK(upgraded.schemaVersion() == 10);
+    CHECK(upgraded.schemaVersion() == 11);
     REQUIRE(upgraded.listTemplates().size() == 1);
     CHECK(upgraded.listTemplates()[0].spaceAfterDate);  // existing templates keep their space
     CHECK(fs::exists(dir.path() / "v9.db.backup-v9"));
+}
+
+TEST_CASE("Each account on a combined statement has its own owners")
+{
+    SmithCase s;
+    AccountRecord c;
+    c.caseId = s.caseId;
+    c.institution = "Chase";
+    c.parts = {{"Chk", "1111", {}, {s.jane}}, {"Sav", "2222", {}, {s.jane}}, {"Chk", "3333", {}, {s.john}}};
+    const auto id = s.db.createAccount(c);
+
+    const auto rec = s.db.getAccount(id);
+    REQUIRE(rec);
+    REQUIRE(rec->parts.size() == 3);
+    CHECK(rec->parts[0].ownerIds == std::vector<std::int64_t>{s.jane});
+    CHECK(rec->parts[2].ownerIds == std::vector<std::int64_t>{s.john});
+    CHECK(rec->ownerIds == std::vector<std::int64_t>{s.jane, s.john});  // everyone on it, once
+
+    CHECK(accountLabel(s.db.loadAccounts(s.caseId).back()) ==
+          "Chase Chk x1111, Sav x2222 (Jane Smith), Chk x3333 (John Smith)");
+
+    // Changing one account's owners; the owner order inside an account is kept.
+    AccountRecord r = *rec;
+    r.parts[2].ownerIds = {s.john, s.jane};
+    s.db.updateAccount(r);
+    CHECK(accountLabel(s.db.loadAccounts(s.caseId).back()) ==
+          "Chase Chk x1111, Sav x2222 (Jane Smith), Chk x3333 (John Smith; Jane Smith)");
+
+    // A display name change is picked up (and the old names recorded), a person in use can't be deleted.
+    s.db.updatePerson(s.jane, "Jane Smith", "W");
+    CHECK(accountLabel(s.db.loadAccounts(s.caseId).back()) == "Chase Chk x1111, Sav x2222 (W), Chk x3333 (John Smith; W)");
+    bool recorded = false;
+    for (const auto& o : s.db.oldAccountNames(s.caseId))
+        recorded = recorded || o.name == "Chase Chk x1111, Sav x2222 (Jane Smith), Chk x3333 (John Smith; Jane Smith)";
+    CHECK(recorded);
+    CHECK_THROWS(s.db.deletePerson(s.jane));
+    r = *s.db.getAccount(id);
+    r.parts[2].ownerIds = {s.john};
+    for (auto& part : r.parts) part.ownerIds = {s.john};
+    s.db.updateAccount(r);
+    CHECK_NOTHROW(s.db.deletePerson(s.jane));
+
+    // Owners are checked per account.
+    r.parts[0].ownerIds = {s.john, s.john};
+    CHECK_THROWS_WITH(s.db.updateAccount(r), ContainsSubstring("twice"));
+    r.parts[0].ownerIds = {424242};
+    CHECK_THROWS_WITH(s.db.updateAccount(r), ContainsSubstring("owner"));
+}
+
+TEST_CASE("A version 10 database gives every account on a combined statement the statement's owners")
+{
+    testing::TempDir dir;
+    const fs::path file = dir.path() / "v10.db";
+    std::int64_t caseId = 0, id = 0;
+    {
+        Database db(file);
+        caseId = db.createCase({0, "Old", ""});
+        const auto h = db.addPerson(caseId, "Husband", "H");
+        const auto w = db.addPerson(caseId, "Wife", "W");
+        AccountRecord c;
+        c.caseId = caseId;
+        c.institution = "Chase";
+        c.parts = {{"Chk", "1111", {}, {h, w}}, {"Sav", "2222", {}, {h, w}}};
+        id = db.createAccount(c);
+    }
+    {
+        SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
+        old.exec("DROP TABLE combined_part_owners; PRAGMA user_version = 10;");  // as a v10 database was
+    }
+    Database db(file);
+    CHECK(db.schemaVersion() == 11);
+    CHECK(fs::exists(dir.path() / "v10.db.backup-v10"));
+    const auto accounts = db.loadAccounts(caseId);
+    REQUIRE(accounts.size() == 1);
+    CHECK(accounts[0].id == id);
+    CHECK(accountLabel(accounts[0]) == "Chase Chk x1111, Sav x2222 (H; W)");  // the name is unchanged
+    REQUIRE(db.getAccount(id)->parts.size() == 2);
+    CHECK(db.getAccount(id)->parts[1].ownerIds.size() == 2);
 }

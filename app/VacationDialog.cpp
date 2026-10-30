@@ -198,6 +198,9 @@ void VacationDialog::buildUi()
     newBtn_ = new QPushButton(tr("New Case"));
     newBtn_->setObjectName("newCase");
     newBtn_->setAutoDefault(false);
+    deleteBtn_ = new QPushButton(tr("Delete Case..."));
+    deleteBtn_->setObjectName("deleteCase");
+    deleteBtn_->setAutoDefault(false);
     revertBtn_ = new QPushButton(tr("Revert"));
     revertBtn_->setObjectName("revert");
     revertBtn_->setAutoDefault(false);
@@ -206,6 +209,7 @@ void VacationDialog::buildUi()
     saveBtn_->setAutoDefault(false);
     auto* editButtons = new QHBoxLayout;
     editButtons->addWidget(newBtn_);
+    editButtons->addWidget(deleteBtn_);
     editButtons->addStretch();
     editButtons->addWidget(revertBtn_);
     editButtons->addWidget(saveBtn_);
@@ -279,6 +283,7 @@ void VacationDialog::buildUi()
         if (editing_) loadForm(*editing_);
     });
     connect(saveBtn_, &QPushButton::clicked, this, [this] { saveCase(); });
+    connect(deleteBtn_, &QPushButton::clicked, this, [this] { deleteCase(); });
     connect(createBtn_, &QPushButton::clicked, this, &VacationDialog::chooseOutputAndCreate);
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::reject);
 
@@ -561,6 +566,7 @@ void VacationDialog::updateButtons()
     selectShown_->setEnabled(loaded && table_->rowCount() > 0);
     clearSelection_->setEnabled(!checked_.empty());
     newBtn_->setEnabled(loaded);
+    deleteBtn_->setEnabled(loaded && editing_ && *editing_ != 0);
     saveBtn_->setEnabled(loaded && editing_ && dirty_);
     revertBtn_->setEnabled(loaded && editing_ && dirty_);
     createBtn_->setEnabled(loaded && !checked_.empty() && !templatePath().isEmpty());
@@ -694,6 +700,39 @@ bool VacationDialog::saveCase()
     report(was == 0 ? tr("Added the new case on row %1 of the spreadsheet.").arg(written)
                     : tr("Saved row %1 to the spreadsheet.").arg(written));
     return true;
+}
+
+void VacationDialog::deleteCase()
+{
+    if (!haveSheet_ || !editing_ || *editing_ == 0) return;
+    const std::size_t row = *editing_;
+    const auto* current = findRow(row);
+    if (!current) return;
+    const int c = sheet_.column("Client (Co-Counsel)");
+    const QString name = c >= 0 ? oneLine(current->values[static_cast<std::size_t>(c)]) : QString();
+    QMessageBox box(QMessageBox::Warning, tr("Delete case"),
+                    tr("Delete row %1%2 from the spreadsheet?\n\nThe row's contents are cleared in the shared workbook, "
+                       "so everyone who uses it will see the case gone. This can't be undone from here.")
+                        .arg(row)
+                        .arg(name.isEmpty() ? QString() : " (" + name + ")"),
+                    QMessageBox::NoButton, this);
+    auto* del = box.addButton(tr("Delete Case"), QMessageBox::DestructiveRole);
+    auto* keep = box.addButton(tr("Keep"), QMessageBox::RejectRole);
+    box.setDefaultButton(keep);
+    box.exec();
+    if (box.clickedButton() != del) return;
+
+    // What the row held when it was loaded (not unsaved typing), so a change by someone else is caught.
+    const auto expected = current->values;
+    if (!guard([&] { finrenamer::deleteVacationRow(toPath(workbookPath()), row, expected); }, tr("Couldn't delete")))
+        return;
+    setDirty(false);
+    checked_.erase(row);
+    seen_.erase(row);
+    editing_.reset();
+    if (!reload()) return;
+    loadForm(std::nullopt);
+    report(tr("Deleted row %1 from the spreadsheet.").arg(row));
 }
 
 // ---- letters --------------------------------------------------------------------------------------------

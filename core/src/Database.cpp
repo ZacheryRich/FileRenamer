@@ -15,7 +15,7 @@ namespace finrenamer {
 
 namespace {
 
-constexpr int kSchemaVersion = 10;
+constexpr int kSchemaVersion = 11;
 
 // Each entry upgrades the schema by one version. Never edit a shipped entry;
 // add a new one instead, so existing databases upgrade in place.
@@ -178,6 +178,23 @@ const char* const kMigrations[] = {
     // Version 10: a template can attach its text straight to the date (no space between).
     R"sql(
     ALTER TABLE document_templates ADD COLUMN space_after_date INTEGER NOT NULL DEFAULT 1;
+    )sql",
+    // Version 11: each account on a combined statement has its own owners (the name groups
+    // accounts by owner). Existing statements give every part the statement's owners, so their
+    // names stay as they were. account_owners keeps the union of the parts' owners, so deleting
+    // or renaming a person still finds the statement.
+    R"sql(
+    CREATE TABLE combined_part_owners (
+        combined_id   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        part_position INTEGER NOT NULL,
+        person_id     INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+        position      INTEGER NOT NULL,
+        PRIMARY KEY (combined_id, part_position, person_id)
+    );
+
+    INSERT INTO combined_part_owners (combined_id, part_position, person_id, position)
+        SELECT cp.combined_id, cp.position, ao.person_id, ao.position
+        FROM combined_parts cp JOIN account_owners ao ON ao.account_id = cp.combined_id;
     )sql",
 };
 
@@ -378,7 +395,13 @@ struct Database::Impl {
                 throw DatabaseError("The same account (" + trimmed(p.accountType) + " " + number +
                                     ") is listed twice.");
         }
-        validateOwners(a);
+        // Each account's owners: real people of this case, none twice.
+        AccountRecord each;
+        each.caseId = a.caseId;
+        for (const CombinedPart& p : a.parts) {
+            each.ownerIds = p.ownerIds;
+            validateOwners(each);
+        }
     }
 
     void validate(const AccountRecord& a)
@@ -423,6 +446,47 @@ struct Database::Impl {
             ins.exec();
             ins.reset();
         }
+
+        SQLite::Statement delOwners(db, "DELETE FROM combined_part_owners WHERE combined_id = ?");
+        delOwners.bind(1, combinedId);
+        delOwners.exec();
+        SQLite::Statement insOwner(db,
+            "INSERT INTO combined_part_owners (combined_id, part_position, person_id, position) VALUES (?, ?, ?, ?)");
+        int partPosition = 0;
+        for (const CombinedPart& p : parts) {
+            int ownerPosition = 0;
+            for (const auto personId : p.ownerIds) {
+                insOwner.bind(1, combinedId);
+                insOwner.bind(2, partPosition);
+                insOwner.bind(3, personId);
+                insOwner.bind(4, ownerPosition++);
+                insOwner.exec();
+                insOwner.reset();
+            }
+            ++partPosition;
+        }
+    }
+
+    // A combined statement given only statement-level owners (AccountRecord::ownerIds, no
+    // per-account owners) gets them on every account: the shorthand the older code used.
+    static AccountRecord withPartOwners(const AccountRecord& a)
+    {
+        AccountRecord out = a;
+        if (!out.isCombined() || out.ownerIds.empty()) return out;
+        for (const CombinedPart& p : out.parts)
+            if (!p.ownerIds.empty()) return out;
+        for (CombinedPart& p : out.parts) p.ownerIds = out.ownerIds;
+        return out;
+    }
+
+    // Everyone on a combined statement, once, in order of first appearance.
+    static std::vector<std::int64_t> unionOwnerIds(const std::vector<CombinedPart>& parts)
+    {
+        std::vector<std::int64_t> out;
+        for (const CombinedPart& p : parts)
+            for (const auto id : p.ownerIds)
+                if (std::find(out.begin(), out.end(), id) == out.end()) out.push_back(id);
+        return out;
     }
 
     std::vector<CombinedPart> partsOf(std::int64_t combinedId)
@@ -431,7 +495,16 @@ struct Database::Impl {
             "SELECT account_type, last_four FROM combined_parts WHERE combined_id = ? ORDER BY position");
         q.bind(1, combinedId);
         std::vector<CombinedPart> out;
-        while (q.executeStep()) out.push_back({q.getColumn(0).getString(), q.getColumn(1).getString()});
+        while (q.executeStep()) out.push_back({q.getColumn(0).getString(), q.getColumn(1).getString(), {}, {}});
+
+        SQLite::Statement owners(db,
+            "SELECT part_position, person_id FROM combined_part_owners WHERE combined_id = ?"
+            " ORDER BY part_position, position");
+        owners.bind(1, combinedId);
+        while (owners.executeStep()) {
+            const auto position = static_cast<std::size_t>(owners.getColumn(0).getInt());
+            if (position < out.size()) out[position].ownerIds.push_back(owners.getColumn(1).getInt64());
+        }
         return out;
     }
 
@@ -523,6 +596,14 @@ struct Database::Impl {
         a.openedOn = r.openedOn;
         a.closedOn = r.closedOn;
         a.combined = r.parts;
+        for (CombinedPart& part : a.combined) {
+            part.owners.clear();
+            for (const auto personId : part.ownerIds) {
+                SQLite::Statement who(db, "SELECT display_name FROM people WHERE id = ?");
+                who.bind(1, personId);
+                if (who.executeStep()) part.owners.push_back(who.getColumn(0).getString());
+            }
+        }
 
         SQLite::Statement names(db, R"sql(
             SELECT p.display_name FROM account_owners o JOIN people p ON p.id = o.person_id
@@ -778,8 +859,9 @@ std::vector<Person> Database::listPeople(std::int64_t caseId) const
 
 // ---- Accounts -------------------------------------------------------------
 
-std::int64_t Database::createAccount(const AccountRecord& a)
+std::int64_t Database::createAccount(const AccountRecord& input)
 {
+    const AccountRecord a = Impl::withPartOwners(input);
     impl_->requireCase(a.caseId);
     impl_->validate(a);
 
@@ -798,15 +880,16 @@ std::int64_t Database::createAccount(const AccountRecord& a)
     q.bind(8, combined ? std::string() : dateToText(a.closedOn));
     q.exec();
     const std::int64_t id = impl_->db.getLastInsertRowid();
-    impl_->writeOwners(id, a.ownerIds);
+    impl_->writeOwners(id, combined ? Impl::unionOwnerIds(a.parts) : a.ownerIds);
     if (combined) impl_->writeParts(id, a.parts);
     else impl_->writePreviousNumbers(id, a.previousLastFour);
     tx.commit();
     return id;
 }
 
-void Database::updateAccount(const AccountRecord& a, const NumberCorrections& numberCorrections)
+void Database::updateAccount(const AccountRecord& input, const NumberCorrections& numberCorrections)
 {
+    const AccountRecord a = Impl::withPartOwners(input);
     const auto existing = getAccount(a.id);
     if (!existing) throw DatabaseError("That account no longer exists.");
 
@@ -826,7 +909,7 @@ void Database::updateAccount(const AccountRecord& a, const NumberCorrections& nu
         u.bind(2, institutionDisplayOrDefault(a));
         u.bind(3, a.id);
         u.exec();
-        impl_->writeOwners(a.id, a.ownerIds);
+        impl_->writeOwners(a.id, Impl::unionOwnerIds(a.parts));
         impl_->writeParts(a.id, a.parts);
         if (before) impl_->recordOldNames(*before, *impl_->loadAccount(a.id));
         tx.commit();

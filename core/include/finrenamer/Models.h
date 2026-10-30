@@ -24,10 +24,16 @@ struct Person {
 };
 
 // One account on a combined statement, in the order it appears in the name. Just typed
-// text: it doesn't have to be an account saved in the case.
+// text: it doesn't have to be an account saved in the case. Each has its own owners; the
+// name groups accounts that have the same owners: "Chase Chk x1111, Sav x2222 (W), Chk x3333 (H)".
 struct CombinedPart {
     std::string accountType;  // "Checking" (may be blank)
     std::string lastFour;     // "1111"
+    // Display names, in name order -- what the name uses. Filled in by the database layer
+    // (loadAccounts) from ownerIds; set directly when a part is built by hand.
+    std::vector<std::string> owners;
+    // Person ids, in name order -- what is stored (AccountRecord::parts).
+    std::vector<std::int64_t> ownerIds;
 };
 
 // An account as the renaming code sees it. The database layer resolves the
@@ -48,8 +54,8 @@ struct Account {
     // Non-empty for a combined statement (one PDF covering several accounts at
     // the same institution): "Chase Checking x1111, Savings x2222 (H)". Then
     // accountType/lastFour/previousLastFour are empty, `institution`/
-    // `institutionDisplay` are the member accounts' and `owners` are the ones
-    // chosen for the combined statement itself.
+    // `institutionDisplay` are the statement's own and each part has its own
+    // owners (`owners` is then just everyone on the statement; the name uses the parts' owners).
     std::vector<CombinedPart> combined;
     // Optional. When the account was opened / closed; the Deficiency List doesn't
     // expect statements before the opening month or after the closing month.

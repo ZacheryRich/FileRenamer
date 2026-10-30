@@ -24,6 +24,7 @@ add_executable(finrenamer_tests
     DocumentNameTests.cpp
     VacationTests.cpp
     PdfUnlockTests.cpp
+    PdfSplitTests.cpp
 )
 # SQLiteCpp is linked directly only so a test can build an old-format database;
 # OpenXLSX so tests can read the spreadsheets back.

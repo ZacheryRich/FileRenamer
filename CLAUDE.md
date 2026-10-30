@@ -81,11 +81,19 @@ sorts into subfolders) → **Undo** if needed.
   `Chase Credit Card x9012 (was x5678, x1234) (H)`.
 
 - **Combined statements** (one PDF covering several accounts at the same institution):
-  `2026.01.31 Chase Chk x1111, Sav x2222, Chk x3333 (H; W).pdf` -- institution once,
-  then each account's *type as entered* and current number with an `x`, in the
-  order the user set, comma-separated; then the owners. User's choices: types as
-  entered (no separate short type), owners **chosen on the combined statement
-  itself**, its own account folder named like the file label, and combined
+  `2026.01.31 Chase Chk x1111, Sav x2222 (W), Chk x3333 (H).pdf` -- institution once,
+  then each account's *type as entered* and current number with an `x`, comma-separated.
+  **Each account on the statement has its own owners** (user's request); accounts with the
+  same owners are **grouped** (groups in the order each first appears, accounts inside a
+  group in the order the user set) and the owners follow their group in parentheses, joined
+  with `; ` (`(H; W)`); an account with no owners gets no parentheses (`buildLabel`). When
+  everyone is the same the name is the old single `(H; W)` at the end. A statement whose
+  accounts have no owners of their own but which has statement-level owners (`Account::owners`,
+  `AccountRecord::ownerIds` as shorthand: `Impl::withPartOwners` copies them to every account)
+  uses those for every account. User's choices: types as
+  entered (no separate short type), owners **chosen per account in the account dialog** (the
+  parts table's Owners column: double-click or the Owners... button, `PartOwnersDialog` -- tick
+  people, names appear in tick order; a new row starts with the owners of the row above), its own account folder named like the file label, and combined
   statements are **saved in the case** (account dialog's "Statement" dropdown:
   Single account / Combined statement; fixed once saved) and picked from the
   rename screen's account list like any account. **A combined statement is typed, not built
@@ -95,7 +103,10 @@ sorts into subfolders) → **Undo** if needed.
   as an `accounts` row with `is_combined = 1`, its own institution columns, plus `combined_parts`
   (position, type, last four; schema v7 -- the v7 migration copied the old linked members' types and
   numbers into it and dropped `combined_members`); `Account::combined` /
-  `AccountRecord::parts` (`CombinedPart{accountType, lastFour}`). Single accounts and statements
+  `AccountRecord::parts` (`CombinedPart{accountType, lastFour, owners, ownerIds}`; schema v11 `combined_part_owners`, whose
+  migration gave every part of an existing statement the statement's owners so names did not change;
+  `account_owners` keeps the union of the parts' owners so renaming/deleting a person still finds the
+  statement). Single accounts and statements
   are independent: deleting/editing an account never touches a statement. The Number dropdown
   doesn't apply. The Deficiency List credits a statement to every *single* account of the case at
   the same institution (full or display name, any case) whose current or older number appears on
@@ -366,7 +377,7 @@ is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a
     "browseWorkbook", "browseTemplate", "reload", "search", "attorney", "paralegal", "county",
     "cases" (checkbox column 0, sheet row in `Qt::UserRole`), "selectShown", "clearSelection",
     "selectedCount", "form", "field_<normalized column>" (e.g. "field_county"), "newCase",
-    "revert", "saveCase", "status", "createLetters", "close".
+    "revert", "saveCase", "deleteCase", "status", "createLetters", "close".
   - **Signatures** ("Signatures..." button, objectName "signatures", next to the template row;
     `SignaturesDialog`): a list of attorney -> signature picture (PNG/JPEG), add/change/remove as
     attorneys join or leave, saved at once in settings.ini under `vacation/signatures` (array of
@@ -378,7 +389,11 @@ is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a
     rels `rIdSignatureN`), or nothing if the signer has no picture. Create Letters reports signatures
     added, signers with no picture, and a template with no Signature field. objectNames in the dialog:
     "signers", "addSigner", "editSigner", "removeSigner", "close".
-  - Not built: deleting a case (do it in Excel), editing other tabs, one-file-per-case output.
+  - **Delete Case...** (button "deleteCase", asks to confirm): `deleteVacationRow` **empties the row's cells**
+    (formatting kept) instead of removing the row, so no other row moves and nothing that refers to rows
+    (formulas, merged cells, filters, table) can break; the case leaves the list (blank rows are ignored) and a
+    later New Case still goes below the last used row. Same conflict check and `.saving` write as a save.
+  - Not built: removing the row itself / closing the gap (do it in Excel), editing other tabs, one-file-per-case output.
 
 - **PDF Unlocker** (start-screen tile "pdfUnlocker"; `UnlockDialog`; no case needed): like SysTools'
   PDF Unlocker. Makes **unprotected copies**: removes owner restrictions (printing, copying,
@@ -415,6 +430,30 @@ is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a
     "includeSubfolders", "removeSelected", "clearList", "batchPassword", "applyPassword",
     "outputFolder", "browseOutput", "unlock", "openOutput", "summary", "close".
   - Licence notices: see **Third-party notices** below.
+
+- **PDF Splitter** (start-screen tile "pdfSplitter"; `SplitDialog`; no case needed): page through one
+  PDF and cut it into several files at pages the user marks (e.g. a year of monthly statements saved as
+  one PDF). Decided defaults (the user gave the goal, not the details -- change if they say so): the
+  PDF is opened with Browse... (asks for the password if it needs one) or dragged in; a **Pages**
+  table lists every page with a "New file" check box (click it, press **Space** on the selected
+  page, or use "Start New File Here"; page 1 always starts the first file), **Every N Pages...**
+  (replaces the marks; for equal-length statements) and **Clear Marks**; rows are shaded by the
+  file they go into and clicking a row shows that page in the preview (scrolling the preview selects
+  its page: `PdfPreview::showPage` / `currentPageChanged`). A **Files that will be made** table shows
+  each file's page range and an editable name; default `<source name> Part 01` (`defaultPartName`,
+  numbers padded so they sort); a typed name is remembered per first page, so moving other marks
+  keeps it. Output goes to a folder the user picks (starts as the original's folder, not
+  remembered); **the original is never changed, nothing is overwritten** (" (2)"); the pieces have
+  no password/restrictions; bookmarks/document-level extras are not carried over. "Split PDF" is
+  disabled after a split until something changes (so a second click can't make "(2)" duplicates).
+  Without Qt PDF the page table still works, only the preview pane is missing. Core `PdfSplit`
+  (`readPdfPages`, `rangesFromStarts`, `startsEvery`, `defaultPartName`, `splitFilePath`, `splitPdf`)
+  uses qpdf (`pushInheritedAttributesToPage`, then `addPage` into a new `QPDF`; written to
+  `<name>.splitting` then renamed; one bad part doesn't stop the others). Not built: auto-detecting
+  where statements start from the PDF's text (idea 2 on the roadmap would give that), sending the
+  pieces straight to the File Renamer. objectNames: "pdfFile", "browsePdf", "pages", "startHere",
+  "everyN", "clearMarks", "parts", "preview", "outputFolder", "browseOutput", "openOutput", "split",
+  "summary", "close". Setting: `split/lastDir`.
 
 ## Third-party notices
 
@@ -457,6 +496,7 @@ component list comes from the Linux Qt 6.12.0 build's SBOM, not the user's Windo
       VacationSheet         load the ALL CASES sheet; saveVacationRow patches one row (pugixml + zip), conflict check
       VacationLetters       letterValues, templateMergeFields, writeCombinedLetters (fills the Word template)
       PdfUnlock             inspectPdf / unlockPdf / unlockedCopyPath: remove PDF restrictions/passwords (qpdf)
+      PdfSplit              readPdfPages, rangesFromStarts, splitPdf: cut a PDF into files at marked pages (qpdf)
       Database              SQLite via SQLiteCpp (pimpl; not exposed in headers)
       Utf8Path              pathFromUtf8 / utf8FromPath / utf16Length / caseFoldKey
     app/                    Qt Widgets GUI (static lib finrenamer_ui + FinRenamer.exe)
@@ -476,10 +516,11 @@ component list comes from the Linux Qt 6.12.0 build's SBOM, not the user's Windo
       DeficiencyDialog      Deficiency List: range, options, accounts, preview, Save as Word
       VacationDialog        Vacation Letters: case list (filters, tick boxes), edit form, Create Letters
       UnlockDialog          PDF Unlocker: file list, passwords, output folder, Unlock PDFs
+      SplitDialog           PDF Splitter: page list with marks, preview, files to make, Split PDF
       NoticesDialog         Licences...: shows THIRD-PARTY-NOTICES.txt (compiled-in resource)
       QtHelpers.h           qstr/stdstr/toPath/qpath, settingsFile, personLabel,
                             disconnectChildren, runGuarded
-    tests/                  Catch2 v3 (171 tests): core + Database + RenameSession + NameFixer + BatesSheet + DocumentName + Vacation + PdfUnlock
+    tests/                  Catch2 v3 (182 tests): core + Database + RenameSession + NameFixer + BatesSheet + DocumentName + Vacation + PdfUnlock + PdfSplit
     installer/FinRenamer.iss  Inno Setup script
 
 Dependencies: Qt 6.12 (Widgets, optional Pdf/PdfWidgets), SQLiteCpp 3.3.3, OpenXLSX
@@ -498,7 +539,7 @@ Also qpdf 12.2.0 + zlib + libjpeg-turbo (PDF Unlocker; see that section). Only c
 - **Schema changes**: append a new entry to `kMigrations` in `Database.cpp` and bump
   `kSchemaVersion`; never edit a shipped migration. Add a test that upgrades a
   database in the previous format (see "A version 1 database is upgraded").
-  Current schema version: **10** (v10 document_templates.space_after_date; v9 document_templates.use_date; v8 document_templates; v7 combined_parts replaced combined_members; v2 added people.display_name, v3 added
+  Current schema version: **11** (v11 combined_part_owners; v10 document_templates.space_after_date; v9 document_templates.use_date; v8 document_templates; v7 combined_parts replaced combined_members; v2 added people.display_name, v3 added
   accounts.institution_display, v4 added account_previous_numbers and
   account_name_history, v5 added accounts.is_combined and combined_members, v6 added
   accounts.opened_on and closed_on, "YYYY-MM-DD" or empty).
@@ -515,7 +556,7 @@ Also qpdf 12.2.0 + zlib + libjpeg-turbo (PDF Unlocker; see that section). Only c
   so existing initializers keep working):
   `Account{id, caseId, institution, institutionDisplay, accountType, lastFour, owners, previousLastFour, combined, openedOn, closedOn}`,
   `AccountRecord{id, caseId, institution, institutionDisplay, accountType, lastFour, ownerIds, previousLastFour, parts, openedOn, closedOn}`,
-  `CombinedPart{accountType, lastFour}`,
+  `CombinedPart{accountType, lastFour, owners, ownerIds}` (`owners` = display names, filled by `loadAccounts`; `ownerIds` = stored),
   `PlanInput{source, account, date, skip, number, document}`.
 - `updateAccount(record, numberCorrections)`: history rows store, for each old file
   name, the number files with that name should **now** use (corrected text, or the
@@ -541,18 +582,18 @@ Also qpdf 12.2.0 + zlib + libjpeg-turbo (PDF Unlocker; see that section). Only c
   (installed on the QApplication in `main.cpp`) turns any parented dialog's application modality into
   window modality just before it is shown, so `exec()` calls stay as they are. Update File Names stays
   a modal child of the Case List. Native Windows file pickers are unverified.
-- **Start screen** (`HomeWindow`, what `main.cpp` shows): six tiles -- **Case List**
+- **Start screen** (`HomeWindow`, what `main.cpp` shows): seven tiles -- **Case List**
   (opens `MainWindow`; the start screen stays open), **File Renamer** (the
   rename screen; the program's name for it is "File Renamer", not "Rename Files") and
-  **Deficiency List**, **Bates Log**, **Vacation Letters** and **PDF Unlocker**; File Renamer and Deficiency List ask which case via `CasePickerDialog` (last case
+  **Deficiency List**, **Bates Log**, **Vacation Letters**, **PDF Unlocker** and **PDF Splitter**; File Renamer and Deficiency List ask which case via `CasePickerDialog` (last case
   preselected). Closing the start screen quits the app (`quitOnLastWindowClosed` is off).
-  objectNames: "caseList", "fileRenamer", "deficiencyList", "batesLog", "vacationLetters", "pdfUnlocker"; picker: "filter", "cases", "newCase".
+  objectNames: "caseList", "fileRenamer", "deficiencyList", "batesLog", "vacationLetters", "pdfUnlocker", "pdfSplitter"; picker: "filter", "cases", "newCase".
   **Look** (user asked for the start screen and Case List to match the File Renamer):
   stock Fusion widgets, boxed panels (`QGroupBox`: Cases / People / Accounts), a
   1.5x bold title, and the File Renamer's footer -- information on the left (data
   folder, label "dataFolder"), **Close** on the right (button "close"); no
   `QStatusBar`. Keep new screens in this style.
-- Account dialog objectNames: "statementType", "institution", "parts" (combined: Type/Number table), "addPart", "removePart", "numbers", "openedOn", "closedOn".
+- Account dialog objectNames: "statementType", "institution", "parts" (combined: Type/Number/Owners table), "addPart", "removePart", "partOwners" (+ "partOwnerList" in the owners dialog), "numbers", "openedOn", "closedOn".
 - Deficiency dialog objectNames: "folders", "subfolders", "fromMonth", "fromYear", "toMonth", "toYear",
   "present", "found", "missing", "accounts", "preview", "summary", "unmatched", "loose", "save".
 - Bates dialog objectNames: "workbook", "folder", "logFile", "browseWorkbook", "browseFolder", "browseLog",
@@ -591,7 +632,7 @@ Also qpdf 12.2.0 + zlib + libjpeg-turbo (PDF Unlocker; see that section). Only c
 Done: core logic, database, case/people/account management, rename screen
 (carry-forward, skip, sorting, partial apply, undo last, refresh), rename history,
 PDF preview, installer, previous account numbers, Update File Names (multi-folder,
-in place), Year/Month/Day date boxes, combined statements, Deficiency List (Word report), Bates Log (list files to Excel, add Bates numbers), Vacation Letters (edit the shared case list, draft letters from the shared template), PDF Unlocker (remove PDF restrictions, open with a known password), file types on the rename screen
+in place), Year/Month/Day date boxes, combined statements, Deficiency List (Word report), Bates Log (list files to Excel, add Bates numbers), Vacation Letters (edit the shared case list, draft letters from the shared template), PDF Unlocker (remove PDF restrictions, open with a known password), PDF Splitter (cut one PDF into files at marked pages), file types on the rename screen
 (statement / user-defined templates / other).
 
 Ideas discussed, not built yet (user's choice of order):

@@ -504,4 +504,65 @@ std::size_t saveVacationRow(const fs::path& workbook, std::size_t row, const std
     return target;
 }
 
+void deleteVacationRow(const fs::path& workbook, std::size_t row, const std::vector<std::string>& expected)
+{
+    if (row <= 1) throw std::runtime_error("Row 1 holds the column names and can't be deleted.");
+    OpenXLSX::XLZipArchive zip;
+    openZip(zip, workbook);
+    const fs::path temp = fs::path(workbook).concat(".saving");
+    try {
+        const SheetLocation where = findSheet(zip);
+        const auto shared = readSharedStrings(zip);
+        pugi::xml_document sheetDoc;
+        parseXml(entry(zip, where.path), sheetDoc, "sheet");
+        const auto raw = readRows(sheetDoc, shared);
+        const VacationSheet current = buildSheet(where.name, raw);
+        const std::size_t count = current.headers.size();
+
+        std::vector<std::string> existing;
+        bool found = false;
+        for (const auto& r : raw) {
+            if (r.number == row && !r.empty()) {
+                existing = r.cells;
+                found = true;
+            }
+        }
+        if (!found)
+            throw SheetConflict("This case is no longer in the spreadsheet (someone else may have removed it). Nothing was "
+                                "deleted. Reload the list.");
+        existing.resize(count);
+        std::vector<std::string> was = expected;
+        padTo(was, count);
+        for (std::size_t i = 0; i < count; ++i)
+            if (fixNewlines(was[i]) != existing[i])
+                throw SheetConflict(
+                    "This case was changed in the spreadsheet after you opened it (someone else may have edited it). "
+                    "Nothing was deleted. Reload the list, then try again.");
+
+        // Empty every cell of the row; the cells keep their formatting, so the row stays part of the table.
+        auto data = sheetDoc.child("worksheet").child("sheetData");
+        for (auto r : data.children("row")) {
+            if (r.attribute("r").as_ullong() != row) continue;
+            for (auto c : r.children("c")) setCellText(c, std::string());
+        }
+        zip.addEntry(where.path, xmlText(sheetDoc));
+        zip.save(utf8FromPath(temp));
+        zip.close();
+    } catch (...) {
+        if (zip.isOpen()) zip.close();
+        std::error_code ignore;
+        fs::remove(temp, ignore);
+        throw;
+    }
+    std::error_code ec;
+    fs::rename(temp, workbook, ec);
+    if (ec) {
+        std::error_code ignore;
+        fs::remove(temp, ignore);
+        throw std::runtime_error(
+            "Couldn't save to the spreadsheet. If it is open in Excel on this computer, close it and try again.\n(" +
+            ec.message() + ")");
+    }
+}
+
 }  // namespace finrenamer

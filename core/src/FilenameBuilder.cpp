@@ -1,5 +1,8 @@
 #include "finrenamer/FilenameBuilder.h"
 
+#include <algorithm>
+#include <iterator>
+
 namespace finrenamer {
 
 std::string sanitizeComponent(std::string_view text)
@@ -46,15 +49,46 @@ std::string buildLabel(const Account& account, std::string_view number, bool wit
 
     append(account.institutionDisplay.empty() ? account.institution : account.institutionDisplay);
     if (account.isCombined()) {
-        // "Checking x1111, Savings x2222" -- one folder name for files and folder.
-        std::string parts;
+        // "Chk x1111, Sav x2222 (W), Chk x3333 (H)": accounts with the same owners are grouped
+        // (in the order each group first appears) and the owners follow the group.
+        struct Group {
+            std::vector<std::string> owners;
+            std::string text;
+        };
+        auto cleanOwners = [](const std::vector<std::string>& names) {
+            std::vector<std::string> out;
+            for (const auto& n : names) {
+                const std::string clean = sanitizeComponent(n);
+                if (!clean.empty()) out.push_back(clean);
+            }
+            return out;
+        };
+        bool anyPartOwners = false;
+        for (const CombinedPart& p : account.combined) anyPartOwners = anyPartOwners || !cleanOwners(p.owners).empty();
+
+        std::vector<Group> groups;
         for (const CombinedPart& p : account.combined) {
             std::string part = sanitizeComponent(p.accountType);
             const std::string n = sanitizeComponent(p.lastFour);
             if (!n.empty()) part += (part.empty() ? "x" : " x") + n;
             if (part.empty()) continue;
+            // A statement whose parts have no owners of their own uses the statement's owners.
+            const auto owners = cleanOwners(anyPartOwners ? p.owners : account.owners);
+            auto it = std::find_if(groups.begin(), groups.end(), [&](const Group& g) { return g.owners == owners; });
+            if (it == groups.end()) {
+                groups.push_back({owners, {}});
+                it = std::prev(groups.end());
+            }
+            if (!it->text.empty()) it->text += ", ";
+            it->text += part;
+        }
+        std::string parts;
+        for (const Group& g : groups) {
             if (!parts.empty()) parts += ", ";
-            parts += part;
+            parts += g.text;
+            std::string owners;
+            for (const auto& o : g.owners) owners += (owners.empty() ? "" : "; ") + o;
+            if (!owners.empty()) parts += " (" + owners + ')';
         }
         append(parts);
     } else {
@@ -76,6 +110,7 @@ std::string buildLabel(const Account& account, std::string_view number, bool wit
 
     std::string owners;
     for (const auto& owner : account.owners) {
+        if (account.isCombined()) break;  // its owners are already in the name, per group
         const std::string clean = sanitizeComponent(owner);
         if (clean.empty()) continue;
         if (!owners.empty()) owners += "; ";

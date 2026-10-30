@@ -15,6 +15,7 @@
 #include "NoticesDialog.h"
 #include "QtHelpers.h"
 #include "RenameWindow.h"
+#include "SplitDialog.h"
 #include "UnlockDialog.h"
 #include "VacationDialog.h"
 
@@ -58,6 +59,8 @@ HomeWindow::HomeWindow(Database& db, const QString& dataFolder, QWidget* parent)
 
     auto* unlocker = makeTile("pdfUnlocker", tr("PDF Unlocker"), tr("Remove print, copy and edit restrictions; open password-protected PDFs"));
 
+    auto* splitter = makeTile("pdfSplitter", tr("PDF Splitter"), tr("Split one big PDF into separate files at the pages you mark"));
+
     auto* central = new QWidget;
     auto* layout = new QVBoxLayout(central);
     layout->addWidget(heading);
@@ -69,6 +72,7 @@ HomeWindow::HomeWindow(Database& db, const QString& dataFolder, QWidget* parent)
     layout->addWidget(bates);
     layout->addWidget(vacation);
     layout->addWidget(unlocker);
+    layout->addWidget(splitter);
     layout->addStretch();
 
     // Footer like the File Renamer's: information on the left, Close on the right.
@@ -96,7 +100,8 @@ HomeWindow::HomeWindow(Database& db, const QString& dataFolder, QWidget* parent)
     connect(bates, &QPushButton::clicked, this, &HomeWindow::openBatesLog);
     connect(vacation, &QPushButton::clicked, this, &HomeWindow::openVacationLetters);
     connect(unlocker, &QPushButton::clicked, this, &HomeWindow::openPdfUnlocker);
-    resize(520, 630);
+    connect(splitter, &QPushButton::clicked, this, &HomeWindow::openPdfSplitter);
+    resize(520, 700);
 }
 
 HomeWindow::~HomeWindow()
@@ -140,7 +145,7 @@ std::optional<std::int64_t> HomeWindow::chooseCase(const QString& purpose)
 QList<QPointer<QWidget>> HomeWindow::openTools() const
 {
     QList<QPointer<QWidget>> open;
-    for (const QPointer<QWidget>& tool : {caseList_, renamer_, deficiency_, bates_, vacation_, unlocker_})
+    for (const QPointer<QWidget>& tool : {caseList_, renamer_, deficiency_, bates_, vacation_, unlocker_, splitter_})
         if (tool && tool->isVisible()) open.append(tool);
     return open;
 }
@@ -224,4 +229,9 @@ void HomeWindow::openVacationLetters()
 void HomeWindow::openPdfUnlocker()
 {
     showTool(unlocker_, [] { return new UnlockDialog; });
+}
+
+void HomeWindow::openPdfSplitter()
+{
+    showTool(splitter_, [] { return new SplitDialog; });
 }

@@ -29,10 +29,18 @@ public:
     static bool isAvailable();
 
     // Shows `path` (does nothing if it's already showing). Empty clears the pane.
-    void showFile(const QString& path);
+    // `password` opens a PDF that asks for one (used by the PDF Splitter).
+    void showFile(const QString& path, const QString& password = QString());
     void clear();
 
     QString currentFile() const { return file_; }
+
+    // Scrolls to a page (0-based). Does nothing when no document is showing.
+    void showPage(int page);
+
+signals:
+    // The page in view changed (0-based): by scrolling, the arrows, or showPage().
+    void currentPageChanged(int page);
 
 private:
     void showMessage(const QString& text);

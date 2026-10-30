@@ -130,6 +130,7 @@ add_library(finrenamer_core STATIC
     src/FileScanner.cpp
     src/FolderSearch.cpp
     src/NameFixer.cpp
+    src/PdfSplit.cpp
     src/PdfUnlock.cpp
     src/RenamePlan.cpp
     src/RenameSession.cpp

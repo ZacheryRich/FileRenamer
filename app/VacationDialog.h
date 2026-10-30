@@ -39,6 +39,7 @@ public:
     void setWorkbook(const QString& path);  // loads the cases
     void setTemplate(const QString& path);
     bool reload();                          // re-reads the workbook; false if it couldn't be read
+    void deleteCase();                      // empties the chosen case's row in the sheet
     bool saveCase();                        // writes the form to the sheet
     bool createLetters(const QString& outputPath);  // merges the ticked cases; false if nothing was made
     std::vector<std::size_t> checkedRows() const;   // sheet row numbers
@@ -92,6 +93,7 @@ private:
     QPushButton* saveBtn_ = nullptr;
     QPushButton* revertBtn_ = nullptr;
     QPushButton* newBtn_ = nullptr;
+    QPushButton* deleteBtn_ = nullptr;
 
     QLabel* status_ = nullptr;
     QPushButton* createBtn_ = nullptr;

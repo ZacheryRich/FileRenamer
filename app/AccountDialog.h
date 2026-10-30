@@ -2,6 +2,8 @@
 
 #include <QDialog>
 
+#include <map>
+
 #include <QHash>
 
 #include <cstdint>
@@ -11,6 +13,7 @@
 
 class DateField;
 class QComboBox;
+class QGroupBox;
 class QDialogButtonBox;
 class QLabel;
 class QLineEdit;
@@ -49,7 +52,12 @@ private:
     void updateKind();
 
     // Combined statement: a typed list of (type, number), in name order.
-    void addPart(const QString& type = {}, const QString& number = {});
+    void addPart(const QString& type = {}, const QString& number = {},
+                 const std::vector<std::int64_t>& owners = {});
+    void loadPeople();
+    void setPartOwners(int row, const std::vector<std::int64_t>& ids);
+    std::vector<std::int64_t> partOwners(int row) const;
+    void editPartOwners(int row);
     void removePart();
     void movePart(int delta);
     std::vector<finrenamer::CombinedPart> parts() const;
@@ -71,8 +79,11 @@ private:
     QComboBox* kind_ = nullptr;
     QWidget* singlePage_ = nullptr;
     QWidget* combinedPage_ = nullptr;
-    QTableWidget* parts_ = nullptr;  // columns: Account type, Number
+    QTableWidget* parts_ = nullptr;  // columns: Account type, Number, Owners
     QPushButton* removePartBtn_ = nullptr;
+    QPushButton* partOwnersBtn_ = nullptr;
+    QGroupBox* ownersBox_ = nullptr;
+    std::map<qlonglong, finrenamer::Person> people_;  // the case's people, by id
     QPushButton* partUpBtn_ = nullptr;
     QPushButton* partDownBtn_ = nullptr;
 

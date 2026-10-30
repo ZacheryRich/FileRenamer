@@ -135,3 +135,32 @@ TEST_CASE("The account type may be left blank")
     CHECK_FALSE(validateAccount(combined));
     CHECK(accountLabel(combined) == "Chase x1111, Sav x2222");
 }
+
+TEST_CASE("A combined statement groups its accounts by owner")
+{
+    Account c;
+    c.institution = "Chase";
+    c.combined = {{"Chk", "1111", {"W"}}, {"Sav", "2222", {"W"}}, {"Chk", "3333", {"H"}}};
+    CHECK(accountLabel(c) == "Chase Chk x1111, Sav x2222 (W), Chk x3333 (H)");
+    CHECK(accountFolderLabel(c) == accountLabel(c));
+
+    // Groups follow the order they first appear, even when an owner comes back later.
+    c.combined = {{"Chk", "1111", {"W"}}, {"Chk", "3333", {"H"}}, {"Sav", "2222", {"W"}}};
+    CHECK(accountLabel(c) == "Chase Chk x1111, Sav x2222 (W), Chk x3333 (H)");
+
+    // Everyone the same: one group (as statements always were). Several owners join with "; ".
+    c.combined = {{"Chk", "1111", {"H", "W"}}, {"Sav", "2222", {"H", "W"}}};
+    CHECK(accountLabel(c) == "Chase Chk x1111, Sav x2222 (H; W)");
+
+    // Accounts with no owner get no parentheses; a joint account is its own group.
+    c.combined = {{"Chk", "1111", {}}, {"Sav", "2222", {"J"}}, {"Chk", "3333", {"H", "W"}}, {"Brk", "4444", {"W", "H"}}};
+    CHECK(accountLabel(c) == "Chase Chk x1111, Sav x2222 (J), Chk x3333 (H; W), Brk x4444 (W; H)");
+
+    // Statement-level owners only (no owners on the accounts): used for every account.
+    c.combined = {{"Chk", "1111"}, {"Sav", "2222"}};
+    c.owners = {"H"};
+    CHECK(accountLabel(c) == "Chase Chk x1111, Sav x2222 (H)");
+    // ... but once any account has its own owners, the statement-level ones are not used.
+    c.combined[0].owners = {"W"};
+    CHECK(accountLabel(c) == "Chase Chk x1111 (W), Sav x2222");
+}

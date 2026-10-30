@@ -91,6 +91,8 @@ PdfPreview::PdfPreview(QWidget* parent) : QWidget(parent)
 
     connect(view_->pageNavigator(), &QPdfPageNavigator::currentPageChanged, this,
             &PdfPreview::updateControls);
+    connect(view_->pageNavigator(), &QPdfPageNavigator::currentPageChanged, this,
+            &PdfPreview::currentPageChanged);
     connect(document_, &QPdfDocument::pageCountChanged, this, &PdfPreview::updateControls);
     // Loading can finish after load() returns, so react to status changes.
     connect(document_, &QPdfDocument::statusChanged, this, &PdfPreview::onDocumentStatus);
@@ -121,7 +123,7 @@ PdfPreview::~PdfPreview()
 #endif
 }
 
-void PdfPreview::showFile(const QString& path)
+void PdfPreview::showFile(const QString& path, const QString& password)
 {
     if (path == file_) return;
     clear();
@@ -141,6 +143,7 @@ void PdfPreview::showFile(const QString& path)
     buffer_.setData(bytes_);
     buffer_.open(QIODevice::ReadOnly);
     showMessage(tr("Loading..."));
+    document_->setPassword(password);
     document_->load(&buffer_);
     onDocumentStatus();  // in case it finished loading already
 #endif
@@ -204,6 +207,17 @@ void PdfPreview::updateControls()
     prevBtn_->setEnabled(pages > 0 && page > 0);
     nextBtn_->setEnabled(pages > 0 && page < pages - 1);
     for (QToolButton* b : {fitWidthBtn_, fitPageBtn_}) b->setEnabled(showing);
+#endif
+}
+
+void PdfPreview::showPage(int page)
+{
+#ifdef FINRENAMER_HAVE_QTPDF
+    if (stack_->currentWidget() != view_ || page < 0 || page >= document_->pageCount()) return;
+    QPdfPageNavigator* nav = view_->pageNavigator();
+    if (nav->currentPage() != page) nav->jump(page, QPointF(), nav->currentZoom());
+#else
+    Q_UNUSED(page);
 #endif
 }
 

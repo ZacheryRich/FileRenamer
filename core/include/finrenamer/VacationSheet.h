@@ -55,4 +55,10 @@ VacationSheet loadVacationSheet(const std::filesystem::path& workbook);
 std::size_t saveVacationRow(const std::filesystem::path& workbook, std::size_t row,
                             const std::vector<std::string>& expected, const std::vector<std::string>& values);
 
+// Deletes a case: empties every cell of that row (formatting stays, so the row remains part of the
+// sheet's table as a blank row; other rows never move, so formulas, merged cells and filters elsewhere
+// are untouched). Same safety as saveVacationRow: `expected` must still match the row (else
+// SheetConflict, nothing written), written through a temporary file.
+void deleteVacationRow(const std::filesystem::path& workbook, std::size_t row, const std::vector<std::string>& expected);
+
 }  // namespace finrenamer

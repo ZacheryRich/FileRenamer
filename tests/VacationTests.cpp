@@ -169,6 +169,34 @@ TEST_CASE("A case changed by someone else is not overwritten")
     CHECK(testing::readFile(f.book) == bytes);  // nothing was written
 }
 
+TEST_CASE("Deleting a case empties its row and leaves the rest alone")
+{
+    Fixture f;
+    const auto before = loadVacationSheet(f.book);
+    const auto otherSheet = zipEntry(f.book, "xl/worksheets/sheet1.xml");
+    deleteVacationRow(f.book, 2, before.rows[0].values);
+    const auto after = loadVacationSheet(f.book);
+    CHECK(after.rows.empty());
+    CHECK(after.headers == before.headers);
+    CHECK(zipEntry(f.book, "xl/worksheets/sheet1.xml") == otherSheet);
+    CHECK(contains(zipEntry(f.book, "xl/worksheets/sheet2.xml"), "<tableParts"));
+    CHECK_FALSE(std::filesystem::exists(f.book.string() + ".saving"));
+}
+
+TEST_CASE("A case changed by someone else is not deleted, and row 1 never is")
+{
+    Fixture f;
+    const auto mine = loadVacationSheet(f.book);
+    auto theirs = mine.rows[0].values;
+    theirs[1] = "Someone Else";
+    saveVacationRow(f.book, 2, mine.rows[0].values, theirs);
+    const auto bytes = testing::readFile(f.book);
+    CHECK_THROWS_AS(deleteVacationRow(f.book, 2, mine.rows[0].values), SheetConflict);
+    CHECK(testing::readFile(f.book) == bytes);
+    CHECK_THROWS_AS(deleteVacationRow(f.book, 1, mine.headers), std::runtime_error);
+    CHECK_THROWS_AS(deleteVacationRow(f.book, 40, mine.rows[0].values), SheetConflict);
+}
+
 TEST_CASE("A new case goes on the first free row and the table grows to cover it")
 {
     Fixture f;
