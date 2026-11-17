@@ -226,6 +226,16 @@ is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a
   firm tree "attorneyTree", our firm first, check box per attorney, New Firm/New Attorney/Edit): from the Attorney
   Directory; side from `Firm::ours`; moving firms keeps them on cases; deleting from the directory takes them off.
   Each attorney has a **letter sign-off** ("attorneySignOff"; blank = "Sincerely,").
+- **Two emails per attorney** (user's request): **Contact email** (`Attorney::email`, column `email`, editor
+  "attorneyEmail") and **Service email** (`Attorney::serviceEmail`, schema **v15** `attorneys.service_email`,
+  editor "attorneyServiceEmail"; both optional). User's rules: **signature blocks use the service email, else the
+  contact email** (`serviceOrContactEmail`); **the letterhead uses the contact email**; **the info sheet's Players
+  list shows every address**, one per line, no "contact"/"service" labels. Fields: `<P>_Email` = `<P>_ServiceEmail`
+  = service else contact (OurEmail, OPC_Email: signature blocks, certificate of service, approved-as-to-form);
+  `<P>_ContactEmail` = contact else service (letters); `Player_Email` = contact + "\n" + service (one if equal
+  ignoring case or one blank). Vacation Letters' eService Email uses service else contact (decided default). Tables
+  show Contact Email and Service Email columns (directory, Assign Attorneys, the case's Attorneys box); the
+  directory search covers both.
 - Schema v13: cases.cause_number/county/court, case_parties, case_attorneys. **v14**: cases.case_type,
   marriage_date, marriage_place, separation_date, insurance, insurance_carrier, policy_number, group_number;
   case_parties.is_client + 11 detail columns; case_children; case_contacts; attorneys.sign_off.
@@ -252,13 +262,17 @@ is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a
   lines), `_Street`, `_CityStateZip` (last line). Shared internals in `core/src/DocxPackage.h` (signature
   `ImageStore`, `addImagesToPackage`, `dropMailMergeLink`; also used by VacationLetters).
 - **The user's templates** were marked up by Claude (scratch script, not in the repo): Case Information Sheet
-  (caption fields, IfChildren around "AND IN THE INTEREST OF", court = «Court \* Upper» with the "____ JUDICIAL
-  DISTRICT" line emptied, client/opposing-party value cells, PLAYERS block = Begin_Players..End_Players in the
+  (caption fields, IfChildren around "AND IN THE INTEREST OF", **court: the caption's right column keeps its first
+  line "IN THE DISTRICT COURT" as on the blank sheet** (user: "should always match the uploaded one"; odd courts are
+  fixed by hand in Word) and the "____ JUDICIAL DISTRICT" line is «CourtDistrict \* Upper» = `courtDistrict(court)`:
+  the court as typed minus a leading "In the District Court" (+ "of the"/"for the"), "____ Judicial District" when
+  blank, client/opposing-party value cells, PLAYERS block = Begin_Players..End_Players in the
   first cell (the empty rows below kept), CHILDREN table rebuilt to one child per set of rows (second child
   columns removed, value cell gridSpan 3) inside IfChildren, insurance/marriage cells, signature block "ATTORNEY
   FOR «ClientRole»" (role only: the name wrapped), certificate of service and "approved as to form" as OPC
   blocks, consent lines) and one Letterhead from the SAN file (OPC block with «OPC_Email», Re line with
-  «Petitioner»/«Respondent», inline IfChildren, «Court», «County»; «SignOff», «OurAttorney», «Initials»/).
+  «Petitioner»/«Respondent», inline IfChildren, «Court», «County»; «SignOff», «OurAttorney», «Initials»/;
+  the OPC block's email was switched to «OPC_ContactEmail» when service emails came in).
   Footer "Title" / "IMMO/ITIO" left for hand editing. Not built: a "Signature" picture in the letterhead (would
   remove the blank signing space when there is no picture).
 
@@ -490,8 +504,8 @@ is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a
     (others use the sheet without this program; the template reads those columns), so nothing about the
     workbook or template changes -- `opposingCounselText` (core `VacationCounsel`): first firm -> OPC (its ticked
     attorneys, one per line), OPC Firm Name, OPC Address; every further firm -> OPC 2 Address as blocks
-    (attorneys, firm name, address; blank line between); eService Email = all ticked attorneys' emails joined
-    "; " (repeats dropped), **left unchanged if none has an email**. Phone/fax are not written. Reopening reads the
+    (attorneys, firm name, address; blank line between); eService Email = all ticked attorneys' emails (service, else
+    contact) joined "; " (repeats dropped), **left unchanged if none has an email**. Phone/fax are not written. Reopening reads the
     form back (`matchOpposingCounsel`: exact, case-insensitive firm name and attorney names within that firm;
     OPC 2 Address blocks split on blank lines, the first line naming a directory firm is the firm, lines above
     it its attorneys); text that matches nothing is **listed in an orange note** ("unmatched") and replaced only if
@@ -585,7 +599,8 @@ is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a
   objectNames: "search", "show", "firms" (Firm/Type/Phone/Attorneys), "newFirm", "editFirm", "deleteFirm",
   "moveAllAttorneys", "firmTitle", "firmDetails", "attorneys" (Name/Bar Number/Email), "newAttorney", "editAttorney",
   "moveAttorney", "deleteAttorney", "summary", "close"; firm editor "firmName", "firmType", "firmPhone", "firmFax",
-  "firmAddress"; attorney editor "attorneyName", "attorneyFirm", "attorneyBar", "attorneyEmail".
+  "firmAddress"; attorney editor "attorneyName", "attorneyFirm", "attorneyBar", "attorneyEmail" (contact),
+  "attorneyServiceEmail", "attorneySignOff". The attorneys table is Name / Bar Number / Contact Email / Service Email.
 
 ## Third-party notices
 
@@ -663,7 +678,7 @@ component list comes from the Linux Qt 6.12.0 build's SBOM, not the user's Windo
       NoticesDialog         Licences...: shows THIRD-PARTY-NOTICES.txt (compiled-in resource)
       QtHelpers.h           qstr/stdstr/toPath/qpath, settingsFile, personLabel,
                             disconnectChildren, runGuarded
-    tests/                  Catch2 v3 (213 tests): core + Database + RenameSession + NameFixer + BatesSheet + DocumentName + Vacation + PdfUnlock + PdfSplit + InfoForm
+    tests/                  Catch2 v3 (219 tests): core + Database + RenameSession + NameFixer + BatesSheet + DocumentName + Vacation + PdfUnlock + PdfSplit + InfoForm
     installer/FinRenamer.iss  Inno Setup script
 
 Dependencies: Qt 6.12 (Widgets, optional Pdf/PdfWidgets), SQLiteCpp 3.3.3, OpenXLSX
@@ -682,7 +697,7 @@ Also qpdf 12.2.0 + zlib + libjpeg-turbo (PDF Unlocker; see that section). Only c
 - **Schema changes**: append a new entry to `kMigrations` in `Database.cpp` and bump
   `kSchemaVersion`; never edit a shipped migration. Add a test that upgrades a
   database in the previous format (see "A version 1 database is upgraded").
-  Current schema version: **14** (v14 full case information + attorneys.sign_off; v13 case court details + case_parties + case_attorneys; v12 firms + attorneys (Attorney Directory); v11 combined_part_owners; v10 document_templates.space_after_date; v9 document_templates.use_date; v8 document_templates; v7 combined_parts replaced combined_members; v2 added people.display_name, v3 added
+  Current schema version: **15** (v15 attorneys.service_email; v14 full case information + attorneys.sign_off; v13 case court details + case_parties + case_attorneys; v12 firms + attorneys (Attorney Directory); v11 combined_part_owners; v10 document_templates.space_after_date; v9 document_templates.use_date; v8 document_templates; v7 combined_parts replaced combined_members; v2 added people.display_name, v3 added
   accounts.institution_display, v4 added account_previous_numbers and
   account_name_history, v5 added accounts.is_combined and combined_members, v6 added
   accounts.opened_on and closed_on, "YYYY-MM-DD" or empty).
@@ -702,7 +717,7 @@ Also qpdf 12.2.0 + zlib + libjpeg-turbo (PDF Unlocker; see that section). Only c
   cityStateZip, phone, dob, pob, ssn, driversLicense, car, employer, email, nameChange}`,
   `CaseChild{id, caseId, name, age, sex, dob, pob, school, ssn}`,
   `CaseContact{id, caseId, role, name, firm, barNumber, address, phone, fax, email}`,
-  `Firm{id, name, phone, fax, address, ours}`, `Attorney{id, firmId, name, barNumber, email, signOff}`,
+  `Firm{id, name, phone, fax, address, ours}`, `Attorney{id, firmId, name, barNumber, email, signOff, serviceEmail}`,
   `Account{id, caseId, institution, institutionDisplay, accountType, lastFour, owners, previousLastFour, combined, openedOn, closedOn}`,
   `AccountRecord{id, caseId, institution, institutionDisplay, accountType, lastFour, ownerIds, previousLastFour, parts, openedOn, closedOn}`,
   `CombinedPart{accountType, lastFour, owners, ownerIds}` (`owners` = display names, filled by `loadAccounts`; `ownerIds` = stored),

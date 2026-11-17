@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 
 #include "finrenamer/DateSpec.h"
 #include "finrenamer/VacationSheet.h"  // normalizeHeader
+#include "finrenamer/WordTemplate.h"   // toLowerText
 
 namespace finrenamer {
 
@@ -62,13 +64,45 @@ void putContact(MergeRecord& r, const std::string& prefix, const std::string& na
     r[normalizeHeader(prefixed(prefix, "Email"))] = trim(email);
 }
 
+}  // namespace
+
+std::string courtDistrict(const std::string& court)
+{
+    std::string s = trim(court);
+    if (s.empty()) return "____ Judicial District";
+    static const std::string lead = "in the district court";
+    if (s.size() >= lead.size() && toLowerText(s.substr(0, lead.size())) == lead) {
+        std::size_t i = lead.size();
+        while (i < s.size() && (s[i] == ',' || s[i] == ' ' || s[i] == ';' || s[i] == '-' || s[i] == '\t')) ++i;
+        s = trim(s.substr(i));
+        if (s.empty()) return "____ Judicial District";
+        // "of the 345th..." / "for the 345th..." after the lead: keep from the district
+        for (const char* w : {"of the ", "for the "})
+            if (toLowerText(s.substr(0, std::strlen(w))) == w) s = s.substr(std::strlen(w));
+    }
+    return s;
+}
+
+namespace {
+
 std::string signOffOf(const Attorney& a) { return trim(a.signOff).empty() ? std::string("Sincerely,") : trim(a.signOff); }
 
 void putAttorney(MergeRecord& r, const std::string& prefix, const std::string& nameKey, const std::string& role,
                  const CaseAttorney& a)
 {
     putContact(r, prefix, nameKey, role, a.attorney.name, a.firm.name, a.attorney.barNumber, a.firm.address,
-               a.firm.phone, a.firm.fax, a.attorney.email);
+               a.firm.phone, a.firm.fax, serviceOrContactEmail(a.attorney));
+    // _Email / _ServiceEmail: for signature blocks and service (service email, else contact email);
+    // _ContactEmail: for letters (contact email, else service email). In the Players list _Email is
+    // every address the attorney has, one per line (user's choice: no "contact"/"service" labels).
+    const std::string contact = trim(a.attorney.email), service = trim(a.attorney.serviceEmail);
+    r[normalizeHeader(prefixed(prefix, "ServiceEmail"))] = service.empty() ? contact : service;
+    r[normalizeHeader(prefixed(prefix, "ContactEmail"))] = contact.empty() ? service : contact;
+    if (prefix == "Player")
+        r[normalizeHeader(prefixed(prefix, "Email"))] =
+            contact.empty() || service.empty() || toLowerText(contact) == toLowerText(service)
+                ? (contact.empty() ? service : contact)
+                : contact + "\n" + service;
     r[normalizeHeader(prefixed(prefix, "SignOff"))] = signOffOf(a.attorney);
     r[normalizeHeader(prefixed(prefix, "Initials"))] = initialsOf(a.attorney.name);
 }
@@ -172,6 +206,7 @@ MergeData caseMergeData(const CaseFile& file, std::int64_t signerId, std::chrono
     put(f, {"CauseNumber", "CauseNo"}, c.causeNumber);
     put(f, {"County"}, c.county);
     put(f, {"Court"}, c.court);
+    put(f, {"CourtDistrict"}, courtDistrict(c.court));
     put(f, {"CaseType", "Type"}, c.caseType);
     put(f, {"MarriageDate", "DateOfMarriage"}, c.marriageDate);
     put(f, {"MarriagePlace", "PlaceOfMarriage"}, c.marriagePlace);
@@ -303,6 +338,9 @@ std::vector<FieldHelp> caseFieldReference()
     add(kCase, "CauseNumber", "Cause number");
     add(kCase, "County", "County (add \\* Upper to the field for capitals)");
     add(kCase, "Court", "Court, as typed for the caption");
+    add(kCase, "CourtDistrict",
+        "The court without a leading \"In the District Court\" (for a caption whose first line says that), "
+        "e.g. 345th Judicial District; \"____ Judicial District\" when the case has no court");
     add(kCase, "CaseType", "Type");
     add(kCase, "MarriageDate", "Date of marriage");
     add(kCase, "MarriagePlace", "Place of marriage");
@@ -346,7 +384,9 @@ std::vector<FieldHelp> caseFieldReference()
     const std::string kOurs = "Our attorneys";
     add(kOurs, "OurAttorney", "The attorney who signs (chosen when the document is made)");
     add(kOurs, "OurBarNumber", "Their bar number (also OurSBN)");
-    add(kOurs, "OurEmail", "Their email");
+    add(kOurs, "OurEmail", "Their email for signature blocks: the service email, or the contact email if none "
+                           "(also OurServiceEmail)");
+    add(kOurs, "OurContactEmail", "Their email for letters: the contact email, or the service email if none");
     add(kOurs, "OurFirm, OurAddress, OurStreet, OurCityStateZip, OurPhone, OurFax", "Our firm's details");
     add(kOurs, "SignOff", "Their sign-off (Attorney Directory); \"Sincerely,\" if blank");
     add(kOurs, "Initials", "Their initials, e.g. SAN");
@@ -356,7 +396,9 @@ std::vector<FieldHelp> caseFieldReference()
     const std::string kOpc = "Opposing counsel";
     add(kOpc, "OPC", "Opposing counsel's name (the first one, outside a block)");
     add(kOpc, "OPC_BarNumber", "Bar number (also OPC_SBN)");
-    add(kOpc, "OPC_Email", "Email");
+    add(kOpc, "OPC_Email", "Email for signature blocks and service: the service email, or the contact email if none "
+                           "(also OPC_ServiceEmail)");
+    add(kOpc, "OPC_ContactEmail", "Email for letters: the contact email, or the service email if none");
     add(kOpc, "OPC_Firm", "Firm name");
     add(kOpc, "OPC_Address", "The firm's whole address (all lines)");
     add(kOpc, "OPC_Street, OPC_CityStateZip", "The address without its last line / just its last line");
@@ -371,7 +413,7 @@ std::vector<FieldHelp> caseFieldReference()
     add(kOther, "Begin_Players ... End_Players",
         "Repeats for opposing counsel, then the other people: Player, Player_Role (\"Opposing Counsel\" or their "
         "role), Player_Firm, Player_BarNumber, Player_Address, Player_Street, Player_CityStateZip, Player_Phone, "
-        "Player_Fax, Player_Email");
+        "Player_Fax, Player_Email (an attorney's contact and service emails, one per line)");
 
     const std::string kHow = "How to use";
     add(kHow, "\\* Upper", "Add to a field for capitals: MERGEFIELD County \\* Upper (also \\* Lower, \\* Caps)");

@@ -88,7 +88,7 @@ OpposingCounselText opposingCounselText(const std::vector<OpposingFirmChoice>& c
                 out.emails += email;
             }
         };
-        for (const auto& a : c.attorneys) addEmail(a.email);
+        for (const auto& a : c.attorneys) addEmail(serviceOrContactEmail(a));
         if (i == 0) {
             for (const auto& a : c.attorneys) appendLine(out.names, a.name);
             out.firmName = trim(c.firm.name);

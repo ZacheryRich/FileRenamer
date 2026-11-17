@@ -116,9 +116,10 @@ AttorneyDialog::AttorneyDialog(Database& db, QWidget* parent) : QDialog(parent),
     firmDetails_->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     detailLayout->addWidget(firmTitle_);
     detailLayout->addWidget(firmDetails_);
-    attorneyTable_ = makeTable("attorneys", {tr("Name"), tr("Bar Number"), tr("Email")});
+    attorneyTable_ = makeTable("attorneys", {tr("Name"), tr("Bar Number"), tr("Contact Email"), tr("Service Email")});
     attorneyTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     attorneyTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    attorneyTable_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
     attorneyTable_->horizontalHeader()->setStretchLastSection(false);
     detailLayout->addWidget(attorneyTable_, 1);
     newAttorneyBtn_ = button(tr("New Attorney..."), "newAttorney");
@@ -216,7 +217,8 @@ bool AttorneyDialog::attorneyMatches(const Attorney& a) const
 {
     const QString s = search_->text().trimmed();
     if (s.isEmpty()) return true;
-    return containsText(a.name, s) || containsText(a.barNumber, s) || containsText(a.email, s);
+    return containsText(a.name, s) || containsText(a.barNumber, s) || containsText(a.email, s) ||
+           containsText(a.serviceEmail, s);
 }
 
 std::optional<std::int64_t> AttorneyDialog::currentFirmId() const
@@ -323,6 +325,7 @@ void AttorneyDialog::populateAttorneys()
             attorneyTable_->setItem(row, 0, cell(a.name, a.id));
             attorneyTable_->setItem(row, 1, cell(a.barNumber));
             attorneyTable_->setItem(row, 2, cell(a.email));
+            attorneyTable_->setItem(row, 3, cell(a.serviceEmail));
             if (keep && *keep == a.id) keepRow = row;
         }
         if (attorneyTable_->rowCount() > 0) attorneyTable_->setCurrentCell(keepRow >= 0 ? keepRow : 0, 0);

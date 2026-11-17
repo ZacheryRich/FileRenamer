@@ -158,3 +158,57 @@ TEST_CASE("Every field in the help list is filled for a full case")
         }
     }
 }
+
+TEST_CASE("Signature blocks use the service email, else the contact email")
+{
+    auto file = sampleCase();
+    file.attorneys[1].attorney.serviceEmail = "efile@ours.test";  // the signer
+    const auto d = caseMergeData(file, 11, kToday);
+    CHECK(get(d.fields, "ouremail") == "efile@ours.test");
+    CHECK(get(d.fields, "ourserviceemail") == "efile@ours.test");
+    CHECK(get(d.fields, "ourcontactemail") == "san@ours.test");     // letters: the contact email
+    CHECK(get(d.fields, "opcemail") == "oscar@opp.test");           // no service email: the contact email
+    CHECK(get(d.fields, "opcserviceemail") == "oscar@opp.test");
+    CHECK(get(d.fields, "opccontactemail") == "oscar@opp.test");
+    const auto& our = d.groups.at("our");
+    REQUIRE(our.size() == 2);
+    CHECK(get(our[0], "ouremail") == "efile@ours.test");
+    CHECK(get(our[1], "ouremail") == "mb@ours.test");
+}
+
+TEST_CASE("Letters use the contact email and the Players list shows every email")
+{
+    auto file = sampleCase();
+    file.attorneys[2].attorney.serviceEmail = "efile@opp.test";
+    file.attorneys[2].attorney.email.clear();
+    auto d = caseMergeData(file, 11, kToday);
+    CHECK(get(d.fields, "opccontactemail") == "efile@opp.test");  // no contact email: the service email
+    CHECK(get(d.groups.at("players")[0], "playeremail") == "efile@opp.test");
+
+    file.attorneys[2].attorney.email = "oscar@opp.test";
+    d = caseMergeData(file, 11, kToday);
+    CHECK(get(d.fields, "opcemail") == "efile@opp.test");
+    CHECK(get(d.fields, "opccontactemail") == "oscar@opp.test");
+    const auto& players = d.groups.at("players");
+    REQUIRE(players.size() == 2);
+    CHECK(get(players[0], "playeremail") == "oscar@opp.test\nefile@opp.test");  // both, no labels
+    CHECK(get(players[1], "playeremail") == "old@x.test");                       // other people: their one email
+    CHECK(get(d.groups.at("opc")[0], "opcemail") == "efile@opp.test");
+
+    file.attorneys[2].attorney.serviceEmail = "OSCAR@opp.test";  // the same address twice: shown once
+    d = caseMergeData(file, 11, kToday);
+    CHECK(get(d.groups.at("players")[0], "playeremail") == "oscar@opp.test");
+}
+
+TEST_CASE("The caption's second line is the court without \"In the District Court\"")
+{
+    CHECK(courtDistrict("In the District Court, 345th Judicial District") == "345th Judicial District");
+    CHECK(courtDistrict("  in the district court  of the 98th Judicial District ") == "98th Judicial District");
+    CHECK(courtDistrict("345th Judicial District") == "345th Judicial District");
+    CHECK(courtDistrict("County Court at Law No. 2") == "County Court at Law No. 2");  // edited by hand
+    CHECK(courtDistrict("") == "____ Judicial District");
+    CHECK(courtDistrict("In the District Court") == "____ Judicial District");
+    auto file = sampleCase();
+    file.info.court = "In the District Court, 345th Judicial District";
+    CHECK(get(caseMergeData(file, 11, kToday).fields, "courtdistrict") == "345th Judicial District");
+}

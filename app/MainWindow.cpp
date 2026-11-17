@@ -213,7 +213,7 @@ void MainWindow::buildUi()
     partiesLayout->addLayout(buttonRow({addPartyBtn, editPartyBtn_, deletePartyBtn_}));
 
     // Attorneys on the case
-    caseAttorneyTable_ = makeTable({tr("Attorney"), tr("Firm"), tr("Side"), tr("Email")});
+    caseAttorneyTable_ = makeTable({tr("Attorney"), tr("Firm"), tr("Side"), tr("Contact Email"), tr("Service Email")});
     caseAttorneyTable_->setObjectName("caseAttorneys");
     auto* assignBtn = new QPushButton(tr("Assign Attorneys..."));
     assignBtn->setObjectName("assignAttorneys");
@@ -971,7 +971,7 @@ void MainWindow::reloadCaseAttorneys()
             const Attorney& a = attorneys[static_cast<std::size_t>(row)];
             const Firm& f = firms[a.firmId];
             const QStringList cells{qstr(a.name), qstr(f.name), f.ours ? tr("Our firm") : tr("Opposing counsel"),
-                                    qstr(a.email)};
+                                    qstr(a.email), qstr(a.serviceEmail)};
             for (int col = 0; col < cells.size(); ++col) {
                 auto* item = new QTableWidgetItem(cells[col]);
                 item->setData(kIdRole, QVariant::fromValue<qlonglong>(a.id));

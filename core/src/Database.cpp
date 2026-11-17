@@ -15,7 +15,7 @@ namespace finrenamer {
 
 namespace {
 
-constexpr int kSchemaVersion = 14;
+constexpr int kSchemaVersion = 15;
 
 // Each entry upgrades the schema by one version. Never edit a shipped entry;
 // add a new one instead, so existing databases upgrade in place.
@@ -273,6 +273,11 @@ const char* const kMigrations[] = {
         fax TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT ''
     );
     ALTER TABLE attorneys ADD COLUMN sign_off TEXT NOT NULL DEFAULT '';
+    )sql",
+
+    // Version 15: an attorney's service email, separate from the contact email (attorneys.email).
+    R"sql(
+    ALTER TABLE attorneys ADD COLUMN service_email TEXT NOT NULL DEFAULT '';
     )sql",
 };
 
@@ -1105,14 +1110,15 @@ void Database::deleteContact(std::int64_t contactId)
 std::vector<Attorney> Database::listCaseAttorneys(std::int64_t caseId) const
 {
     SQLite::Statement q(impl_->db,
-        "SELECT a.id, a.firm_id, a.name, a.bar_number, a.email, a.sign_off FROM case_attorneys ca"
+        "SELECT a.id, a.firm_id, a.name, a.bar_number, a.email, a.sign_off, a.service_email FROM case_attorneys ca"
         " JOIN attorneys a ON a.id = ca.attorney_id JOIN firms f ON f.id = a.firm_id"
         " WHERE ca.case_id = ? ORDER BY f.is_ours DESC, f.name COLLATE NOCASE, a.name COLLATE NOCASE, a.id");
     q.bind(1, caseId);
     std::vector<Attorney> out;
     while (q.executeStep())
         out.push_back({q.getColumn(0).getInt64(), q.getColumn(1).getInt64(), q.getColumn(2).getString(),
-                       q.getColumn(3).getString(), q.getColumn(4).getString(), q.getColumn(5).getString()});
+                       q.getColumn(3).getString(), q.getColumn(4).getString(), q.getColumn(5).getString(),
+                       q.getColumn(6).getString()});
     return out;
 }
 
@@ -1436,7 +1442,8 @@ static Firm readFirm(SQLite::Statement& q)
 static Attorney readAttorney(SQLite::Statement& q)
 {
     return {q.getColumn(0).getInt64(), q.getColumn(1).getInt64(), q.getColumn(2).getString(),
-            q.getColumn(3).getString(), q.getColumn(4).getString(), q.getColumn(5).getString()};
+            q.getColumn(3).getString(), q.getColumn(4).getString(), q.getColumn(5).getString(),
+            q.getColumn(6).getString()};
 }
 
 static void requireFirm(SQLite::Database& db, std::int64_t id)
@@ -1514,7 +1521,7 @@ void Database::deleteFirm(std::int64_t firmId)
 std::vector<Attorney> Database::listAttorneys(std::int64_t firmId) const
 {
     SQLite::Statement q(impl_->db,
-        "SELECT id, firm_id, name, bar_number, email, sign_off FROM attorneys WHERE firm_id = ? ORDER BY name COLLATE NOCASE, id");
+        "SELECT id, firm_id, name, bar_number, email, sign_off, service_email FROM attorneys WHERE firm_id = ? ORDER BY name COLLATE NOCASE, id");
     q.bind(1, firmId);
     std::vector<Attorney> out;
     while (q.executeStep()) out.push_back(readAttorney(q));
@@ -1524,7 +1531,7 @@ std::vector<Attorney> Database::listAttorneys(std::int64_t firmId) const
 std::vector<Attorney> Database::listAllAttorneys() const
 {
     SQLite::Statement q(impl_->db,
-        "SELECT id, firm_id, name, bar_number, email, sign_off FROM attorneys ORDER BY name COLLATE NOCASE, id");
+        "SELECT id, firm_id, name, bar_number, email, sign_off, service_email FROM attorneys ORDER BY name COLLATE NOCASE, id");
     std::vector<Attorney> out;
     while (q.executeStep()) out.push_back(readAttorney(q));
     return out;
@@ -1534,12 +1541,13 @@ std::int64_t Database::createAttorney(const Attorney& a)
 {
     checkAttorney(impl_->db, a);
     SQLite::Statement q(impl_->db,
-        "INSERT INTO attorneys (firm_id, name, bar_number, email, sign_off) VALUES (?, ?, ?, ?, ?)");
+        "INSERT INTO attorneys (firm_id, name, bar_number, email, sign_off, service_email) VALUES (?, ?, ?, ?, ?, ?)");
     q.bind(1, a.firmId);
     q.bind(2, trimmedName(a.name));
     q.bind(3, trimmedName(a.barNumber));
     q.bind(4, trimmedName(a.email));
     q.bind(5, trimmedName(a.signOff));
+    q.bind(6, trimmedName(a.serviceEmail));
     q.exec();
     return impl_->db.getLastInsertRowid();
 }
@@ -1548,13 +1556,15 @@ void Database::updateAttorney(const Attorney& a)
 {
     checkAttorney(impl_->db, a);
     SQLite::Statement q(impl_->db,
-        "UPDATE attorneys SET firm_id = ?, name = ?, bar_number = ?, email = ?, sign_off = ? WHERE id = ?");
+        "UPDATE attorneys SET firm_id = ?, name = ?, bar_number = ?, email = ?, sign_off = ?, service_email = ?"
+        " WHERE id = ?");
     q.bind(1, a.firmId);
     q.bind(2, trimmedName(a.name));
     q.bind(3, trimmedName(a.barNumber));
     q.bind(4, trimmedName(a.email));
     q.bind(5, trimmedName(a.signOff));
-    q.bind(6, a.id);
+    q.bind(6, trimmedName(a.serviceEmail));
+    q.bind(7, a.id);
     if (q.exec() == 0) throw DatabaseError("That attorney no longer exists.");
 }
 

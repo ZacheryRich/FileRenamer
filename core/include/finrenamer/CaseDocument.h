@@ -42,6 +42,11 @@ std::vector<FieldHelp> caseFieldReference();
 std::string initialsOf(const std::string& name);                    // "Scott A. Nyitray" -> "SAN"
 std::string joinNames(const std::vector<std::string>& names);        // "A", "A and B", "A, B, and C"
 std::string ageOn(const std::string& dob, std::chrono::year_month_day today);  // "" if the date can't be read
+// The court for the caption's second line under a fixed "IN THE DISTRICT COURT": the court as typed
+// without a leading "In the District Court" ("In the District Court, 345th Judicial District" ->
+// "345th Judicial District"); a court typed some other way is returned as typed (the user edits
+// those few documents by hand). Blank -> "____ Judicial District", as on the firm's blank sheet.
+std::string courtDistrict(const std::string& court);
 std::string longDate(std::chrono::year_month_day d);                // "November 10, 2026"
 // The last line of a multi-line address (city, state, ZIP) and the lines before it.
 std::string addressStreet(const std::string& address);

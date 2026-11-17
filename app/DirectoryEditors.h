@@ -113,7 +113,12 @@ public:
         bar_->setObjectName("attorneyBar");
         email_ = new QLineEdit(qstr(initial.email));
         email_->setObjectName("attorneyEmail");
+        serviceEmail_ = new QLineEdit(qstr(initial.serviceEmail));
+        serviceEmail_->setObjectName("attorneyServiceEmail");
         for (auto* e : {bar_, email_}) e->setPlaceholderText(tr("Optional"));
+        serviceEmail_->setPlaceholderText(tr("Optional; blank = the contact email is used"));
+        serviceEmail_->setToolTip(tr("The email for service. Signature blocks and eService use it; "
+                                     "when it is blank they use the contact email."));
         signOff_ = new QLineEdit(qstr(initial.signOff));
         signOff_->setObjectName("attorneySignOff");
         signOff_->setPlaceholderText(tr("Sincerely,"));
@@ -123,7 +128,8 @@ public:
         form->addRow(tr("Name:"), name_);
         form->addRow(tr("Firm:"), firm_);
         form->addRow(tr("Bar number:"), bar_);
-        form->addRow(tr("Email:"), email_);
+        form->addRow(tr("Contact email:"), email_);
+        form->addRow(tr("Service email:"), serviceEmail_);
         form->addRow(tr("Letter sign-off:"), signOff_);
         if (initial.id != 0) {
             auto* hint = new QLabel(tr("Choosing another firm moves the attorney there."));
@@ -138,7 +144,7 @@ public:
         auto* layout = new QVBoxLayout(this);
         layout->addLayout(form);
         layout->addWidget(buttons_);
-        resize(440, 250);
+        resize(460, 280);
         updateOk();
     }
 
@@ -149,6 +155,7 @@ public:
         a.firmId = firm_->currentData().toLongLong();
         a.barNumber = stdstr(bar_->text().trimmed());
         a.email = stdstr(email_->text().trimmed());
+        a.serviceEmail = stdstr(serviceEmail_->text().trimmed());
         a.signOff = stdstr(signOff_->text().trimmed());
         return a;
     }
@@ -164,6 +171,7 @@ private:
     QComboBox* firm_;
     QLineEdit* bar_;
     QLineEdit* email_;
+    QLineEdit* serviceEmail_;
     QLineEdit* signOff_;
     QDialogButtonBox* buttons_;
 };

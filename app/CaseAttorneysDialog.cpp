@@ -44,11 +44,12 @@ CaseAttorneysDialog::CaseAttorneysDialog(Database& db, const QString& caseName, 
 
     tree_ = new QTreeWidget;
     tree_->setObjectName("attorneyTree");
-    tree_->setHeaderLabels({tr("Firm / attorney"), tr("Bar Number"), tr("Email")});
+    tree_->setHeaderLabels({tr("Firm / attorney"), tr("Bar Number"), tr("Contact Email"), tr("Service Email")});
     tree_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     tree_->header()->setStretchLastSection(false);
     tree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     tree_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    tree_->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
 
     auto* newFirmBtn = new QPushButton(tr("New Firm..."));
     newFirmBtn->setObjectName("newFirm");
@@ -161,6 +162,7 @@ void CaseAttorneysDialog::reload()
             item->setText(0, qstr(a.name));
             item->setText(1, qstr(a.barNumber));
             item->setText(2, qstr(a.email));
+            item->setText(3, qstr(a.serviceEmail));
             item->setData(0, kFirmRole, QVariant::fromValue<qlonglong>(f->id));
             item->setData(0, kAttorneyRole, QVariant::fromValue<qlonglong>(a.id));
             item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);

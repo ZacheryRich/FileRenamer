@@ -165,8 +165,15 @@ struct Attorney {
     std::int64_t firmId = 0;
     std::string name;
     std::string barNumber;
-    std::string email;
-    std::string signOff;  // how their letters close, e.g. "Very truly yours,"; blank = "Sincerely,"
+    std::string email;         // contact email
+    std::string signOff;       // how their letters close, e.g. "Very truly yours,"; blank = "Sincerely,"
+    std::string serviceEmail;  // email for service (e-filing); optional
 };
+
+// The email for signature blocks and service: the service email, else the contact email.
+inline const std::string& serviceOrContactEmail(const Attorney& a)
+{
+    return a.serviceEmail.find_first_not_of(" \t\r\n") != std::string::npos ? a.serviceEmail : a.email;
+}
 
 }  // namespace finrenamer

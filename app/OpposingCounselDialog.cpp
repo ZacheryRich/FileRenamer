@@ -87,7 +87,7 @@ OpposingCounselDialog::OpposingCounselDialog(Database& db, const QString& caseTi
     entryButtons->addWidget(downBtn_);
     entriesLayout->addLayout(entryButtons);
     entriesLayout->addWidget(hint(tr("The first firm goes in the OPC, OPC Firm Name and OPC Address columns; any others "
-                                     "go in OPC 2 Address. Every ticked attorney's email goes in eService Email.")));
+                                     "go in OPC 2 Address. Every ticked attorney's service email (or contact email, if none) goes in eService Email.")));
 
     // ---- Right: the chosen firm and its attorneys ----
     auto* firmBox = new QGroupBox(tr("Firm and attorneys"));
@@ -363,7 +363,7 @@ void OpposingCounselDialog::showEntry()
             for (const auto& a : attorneys_) {
                 if (a.firmId != f->id) continue;
                 QString text = qstr(a.name);
-                if (!a.email.empty()) text += "   <" + qstr(a.email) + ">";
+                if (!serviceOrContactEmail(a).empty()) text += "   <" + qstr(serviceOrContactEmail(a)) + ">";
                 auto* item = new QListWidgetItem(text);
                 item->setData(Qt::UserRole, QVariant::fromValue<qlonglong>(a.id));
                 item->setFlags(item->flags() | Qt::ItemIsUserCheckable);

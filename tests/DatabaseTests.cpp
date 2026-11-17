@@ -35,13 +35,13 @@ TEST_CASE("A new database is created at the current schema version")
     const fs::path file = dir.path() / "finrenamer.db";
     {
         Database db(file);
-        CHECK(db.schemaVersion() == 14);
+        CHECK(db.schemaVersion() == 15);
         db.createCase({0, "Persisted", ""});
     }
     CHECK(fs::exists(file));
 
     Database reopened(file);  // reopening must not re-run migrations
-    CHECK(reopened.schemaVersion() == 14);
+    CHECK(reopened.schemaVersion() == 15);
     REQUIRE(reopened.listCases().size() == 1);
     CHECK(reopened.listCases()[0].clientName == "Persisted");
 }
@@ -330,7 +330,7 @@ TEST_CASE("A version 1 database is upgraded and keeps its data")
     }
 
     Database db(file);
-    CHECK(db.schemaVersion() == 14);
+    CHECK(db.schemaVersion() == 15);
     const auto people = db.listPeople(1);
     REQUIRE(people.size() == 1);
     CHECK(people[0].displayName == "José Núñez");
@@ -579,7 +579,7 @@ TEST_CASE("A version 4 database is upgraded to combined statements")
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 14);
+    CHECK(db.schemaVersion() == 15);
     REQUIRE(db.loadAccounts(1).size() == 1);
     CHECK_FALSE(db.loadAccounts(1)[0].isCombined());
     AccountRecord c;
@@ -628,7 +628,7 @@ TEST_CASE("A version 6 database keeps its combined statements, now with typed pa
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 14);
+    CHECK(db.schemaVersion() == 15);
     const auto accounts = db.loadAccounts(1);
     REQUIRE(accounts.size() == 3);
     const Account& combined = accounts.back();
@@ -713,7 +713,7 @@ TEST_CASE("A version 5 database is upgraded to opening and closing dates")
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 14);
+    CHECK(db.schemaVersion() == 15);
     auto r = *db.getAccount(1);
     CHECK_FALSE(r.openedOn);
     CHECK_FALSE(r.closedOn);
@@ -790,7 +790,7 @@ TEST_CASE("A version 7 database is upgraded and gets an empty template list")
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 14);
+    CHECK(db.schemaVersion() == 15);
     CHECK(db.getCase(1).has_value());
     CHECK(db.listTemplates().empty());
     CHECK_NOTHROW(db.createTemplate({0, "Letter", "Ltr from {Sender}"}));
@@ -824,7 +824,7 @@ TEST_CASE("Templates can leave the date out, and a version 8 database gets that 
         )sql");
     }
     Database upgraded(file);
-    CHECK(upgraded.schemaVersion() == 14);
+    CHECK(upgraded.schemaVersion() == 15);
     REQUIRE(upgraded.listTemplates().size() == 1);
     CHECK(upgraded.listTemplates()[0].useDate);  // existing templates keep their date
 }
@@ -848,7 +848,7 @@ TEST_CASE("Upgrading an older database first leaves a backup copy beside it")
     }
     {
         Database db(dbFile);
-        CHECK(db.schemaVersion() == 14);
+        CHECK(db.schemaVersion() == 15);
         CHECK(db.listCases().size() == 1);
     }
     const fs::path backup = data.path() / "finrenamer.db.backup-v7";
@@ -905,7 +905,7 @@ TEST_CASE("Templates can attach to the date, and a version 9 database gets that 
         )sql");
     }
     Database upgraded(file);
-    CHECK(upgraded.schemaVersion() == 14);
+    CHECK(upgraded.schemaVersion() == 15);
     REQUIRE(upgraded.listTemplates().size() == 1);
     CHECK(upgraded.listTemplates()[0].spaceAfterDate);  // existing templates keep their space
     CHECK(fs::exists(dir.path() / "v9.db.backup-v9"));
@@ -979,7 +979,7 @@ TEST_CASE("A version 10 database gives every account on a combined statement the
         old.exec("DROP TABLE combined_part_owners; ALTER TABLE cases DROP COLUMN case_type; ALTER TABLE cases DROP COLUMN marriage_date; ALTER TABLE cases DROP COLUMN marriage_place; ALTER TABLE cases DROP COLUMN separation_date; ALTER TABLE cases DROP COLUMN insurance; ALTER TABLE cases DROP COLUMN insurance_carrier; ALTER TABLE cases DROP COLUMN policy_number; ALTER TABLE cases DROP COLUMN group_number; DROP TABLE IF EXISTS case_children; DROP TABLE IF EXISTS case_contacts; ALTER TABLE cases DROP COLUMN cause_number; ALTER TABLE cases DROP COLUMN county; ALTER TABLE cases DROP COLUMN court; DROP TABLE case_attorneys; DROP TABLE case_parties; DROP TABLE attorneys; DROP TABLE firms; PRAGMA user_version = 10;");  // as a v10 database was
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 14);
+    CHECK(db.schemaVersion() == 15);
     CHECK(fs::exists(dir.path() / "v10.db.backup-v10"));
     const auto accounts = db.loadAccounts(caseId);
     REQUIRE(accounts.size() == 1);
@@ -999,7 +999,7 @@ TEST_CASE("A version 11 database is upgraded and gets an empty attorney director
         old.exec("ALTER TABLE cases DROP COLUMN case_type; ALTER TABLE cases DROP COLUMN marriage_date; ALTER TABLE cases DROP COLUMN marriage_place; ALTER TABLE cases DROP COLUMN separation_date; ALTER TABLE cases DROP COLUMN insurance; ALTER TABLE cases DROP COLUMN insurance_carrier; ALTER TABLE cases DROP COLUMN policy_number; ALTER TABLE cases DROP COLUMN group_number; DROP TABLE IF EXISTS case_children; DROP TABLE IF EXISTS case_contacts; ALTER TABLE cases DROP COLUMN cause_number; ALTER TABLE cases DROP COLUMN county; ALTER TABLE cases DROP COLUMN court; DROP TABLE case_attorneys; DROP TABLE case_parties; DROP TABLE attorneys; DROP TABLE firms; PRAGMA user_version = 11;");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 14);
+    CHECK(db.schemaVersion() == 15);
     CHECK(fs::exists(dir.path() / "v11.db.backup-v11"));
     CHECK(db.listFirms().empty());
     CHECK(db.listAllAttorneys().empty());
@@ -1085,10 +1085,11 @@ TEST_CASE("A version 12 database is upgraded to court details, parties and case 
         SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
         old.exec("ALTER TABLE cases DROP COLUMN case_type; ALTER TABLE cases DROP COLUMN marriage_date; ALTER TABLE cases DROP COLUMN marriage_place; ALTER TABLE cases DROP COLUMN separation_date; ALTER TABLE cases DROP COLUMN insurance; ALTER TABLE cases DROP COLUMN insurance_carrier; ALTER TABLE cases DROP COLUMN policy_number; ALTER TABLE cases DROP COLUMN group_number; DROP TABLE IF EXISTS case_children; DROP TABLE IF EXISTS case_contacts; ALTER TABLE cases DROP COLUMN cause_number; ALTER TABLE cases DROP COLUMN county;"
                  " ALTER TABLE cases DROP COLUMN court; DROP TABLE case_attorneys; DROP TABLE case_parties;"
-                 " ALTER TABLE attorneys DROP COLUMN sign_off; PRAGMA user_version = 12;");
+                 " ALTER TABLE attorneys DROP COLUMN sign_off; ALTER TABLE attorneys DROP COLUMN service_email;"
+                 " PRAGMA user_version = 12;");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 14);
+    CHECK(db.schemaVersion() == 15);
     CHECK(fs::exists(dir.path() / "v12.db.backup-v12"));
     const auto c = db.getCase(caseId);
     REQUIRE(c);
@@ -1195,11 +1196,11 @@ TEST_CASE("A version 13 database is upgraded to the full case information")
                               "drivers_license", "car", "employer", "email", "name_change"})
             sql += std::string("ALTER TABLE case_parties DROP COLUMN ") + c + ";";
         sql += "DROP TABLE case_children; DROP TABLE case_contacts; ALTER TABLE attorneys DROP COLUMN sign_off;"
-               " PRAGMA user_version = 13;";
+               " ALTER TABLE attorneys DROP COLUMN service_email; PRAGMA user_version = 13;";
         old.exec(sql);
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 14);
+    CHECK(db.schemaVersion() == 15);
     CHECK(fs::exists(dir.path() / "v13.db.backup-v13"));
     const auto c = *db.getCase(caseId);
     CHECK(c.court == "345th Judicial District");
@@ -1305,4 +1306,48 @@ TEST_CASE("An attorney's letter sign-off is kept")
     db.updateAttorney(a);
     db.setCaseAttorneys(c, {id});
     CHECK(db.listCaseAttorneys(c)[0].signOff == "Regards,");
+}
+
+TEST_CASE("An attorney has a contact email and a separate service email")
+{
+    auto db = Database::openInMemory();
+    const auto firm = db.createFirm({0, "Our Firm", "", "", "", true});
+    Attorney a{0, firm, "Ann Able", "1", "ann@x.test", "", " service@x.test "};
+    a.id = db.createAttorney(a);
+    auto got = db.listAllAttorneys()[0];
+    CHECK(got.email == "ann@x.test");
+    CHECK(got.serviceEmail == "service@x.test");
+    CHECK(serviceOrContactEmail(got) == "service@x.test");
+    got.serviceEmail = "  ";
+    db.updateAttorney(got);
+    got = db.listAttorneys(firm)[0];
+    CHECK(got.serviceEmail.empty());
+    CHECK(serviceOrContactEmail(got) == "ann@x.test");
+    got.serviceEmail = "efile@x.test";
+    db.updateAttorney(got);
+    const auto c = db.createCase({0, "Smith"});
+    db.setCaseAttorneys(c, {a.id});
+    CHECK(db.listCaseAttorneys(c)[0].serviceEmail == "efile@x.test");
+}
+
+TEST_CASE("A version 14 database is upgraded and its attorneys keep their email as the contact email")
+{
+    testing::TempDir dir;
+    const fs::path file = dir.path() / "v14.db";
+    {
+        Database created(file);
+        created.createAttorney({0, created.createFirm({0, "Our Firm", "", "", "", true}), "Ann Able", "1",
+                                "ann@x.test", "Regards,"});
+    }
+    {
+        SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
+        old.exec("ALTER TABLE attorneys DROP COLUMN service_email; PRAGMA user_version = 14;");
+    }
+    Database db(file);
+    CHECK(db.schemaVersion() == 15);
+    CHECK(fs::exists(dir.path() / "v14.db.backup-v14"));
+    const auto a = db.listAllAttorneys()[0];
+    CHECK(a.email == "ann@x.test");
+    CHECK(a.signOff == "Regards,");
+    CHECK(a.serviceEmail.empty());
 }

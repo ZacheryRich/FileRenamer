@@ -94,3 +94,11 @@ TEST_CASE("Text typed by hand is matched exactly or reported, never guessed")
     CHECK(matchOpposingCounsel("", "", "", d.firms, d.attorneys).choices.empty());
 }
 
+
+TEST_CASE("eService Email uses an attorney's service email when there is one")
+{
+    Directory d;
+    d.attorneys[0].serviceEmail = "efile@alpha.example";
+    const auto text = opposingCounselText({{d.firms[0], {d.attorneys[0], d.attorneys[1]}}, {d.firms[1], {d.attorneys[2]}}});
+    CHECK(text.emails == "efile@alpha.example; bea@beta.example");
+}
