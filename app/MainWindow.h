@@ -14,9 +14,11 @@ class QLineEdit;
 class QListWidget;
 class QPushButton;
 class QStackedWidget;
+class QTabWidget;
 class QTableWidget;
 
-// Case / people / account management. The rename screen opens from here.
+// Case management: court details, parties, attorneys on the case, people (account owners) and
+// accounts. The rename screen opens from here.
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
@@ -27,6 +29,10 @@ public:
 
     // Re-reads people and accounts after another window (the File Renamer) may have changed them.
     void refreshAfterTool();
+
+protected:
+    // Coming back to the window re-reads the case's attorneys (the directory may have changed).
+    bool event(QEvent* e) override;
 
 signals:
     // The File Renamer and Deficiency List are single windows owned by the start screen.
@@ -41,16 +47,36 @@ private:
     void filterCases(const QString& text);
     void showSelectedCase();
     void reloadPeople();
+    void reloadParties();
+    void reloadContacts();
+    void reloadChildren();
+    void reloadCaseAttorneys();
     void reloadAccounts(std::optional<std::int64_t> select = std::nullopt);
     void updateButtons();
 
     std::optional<std::int64_t> currentCaseId() const;
     std::optional<std::int64_t> currentPersonId() const;
+    std::optional<std::int64_t> currentPartyId() const;
+    std::optional<std::int64_t> currentCaseAttorneyId() const;
     std::optional<std::int64_t> currentAccountId() const;
 
     void newCase();
+    void importForm(bool intoCurrentCase);  // New from Form / Fill from Form
     void editCase();
     void deleteCase();
+    void addContact();
+    void editContact();
+    void deleteContact();
+    void addChild();
+    void editChild();
+    void deleteChild();
+    void createDocument();
+    void addParty();
+    void editParty();
+    void deleteParty();
+    void assignAttorneys();
+    void editCaseAttorney();
+    void removeCaseAttorney();
     void addPerson();
     void editPerson();
     void deletePerson();
@@ -76,9 +102,28 @@ private:
     QStackedWidget* detailStack_ = nullptr;
     QLabel* caseTitle_ = nullptr;
     QLabel* caseNotes_ = nullptr;
+    QLabel* caseCourt_ = nullptr;   // "Cause No. ... | ... County | court"
     QPushButton* renameFilesBtn_ = nullptr;
     QPushButton* updateNamesBtn_ = nullptr;
     QPushButton* deficiencyBtn_ = nullptr;
+
+    QTabWidget* caseTabs_ = nullptr;      // Case Information | Accounts
+    QPushButton* createDocBtn_ = nullptr;
+    QPushButton* fillFromFormBtn_ = nullptr;
+    QTableWidget* contactTable_ = nullptr;
+    QPushButton* editContactBtn_ = nullptr;
+    QPushButton* deleteContactBtn_ = nullptr;
+    QTableWidget* childTable_ = nullptr;
+    QPushButton* editChildBtn_ = nullptr;
+    QPushButton* deleteChildBtn_ = nullptr;
+
+    QTableWidget* partyTable_ = nullptr;
+    QPushButton* editPartyBtn_ = nullptr;
+    QPushButton* deletePartyBtn_ = nullptr;
+
+    QTableWidget* caseAttorneyTable_ = nullptr;
+    QPushButton* editCaseAttorneyBtn_ = nullptr;
+    QPushButton* removeCaseAttorneyBtn_ = nullptr;
 
     QTableWidget* peopleTable_ = nullptr;
     QPushButton* editPersonBtn_ = nullptr;

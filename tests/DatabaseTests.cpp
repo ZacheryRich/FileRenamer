@@ -35,13 +35,13 @@ TEST_CASE("A new database is created at the current schema version")
     const fs::path file = dir.path() / "finrenamer.db";
     {
         Database db(file);
-        CHECK(db.schemaVersion() == 11);
+        CHECK(db.schemaVersion() == 14);
         db.createCase({0, "Persisted", ""});
     }
     CHECK(fs::exists(file));
 
     Database reopened(file);  // reopening must not re-run migrations
-    CHECK(reopened.schemaVersion() == 11);
+    CHECK(reopened.schemaVersion() == 14);
     REQUIRE(reopened.listCases().size() == 1);
     CHECK(reopened.listCases()[0].clientName == "Persisted");
 }
@@ -69,7 +69,7 @@ TEST_CASE("Cases: create, list sorted, update, require a name")
     db.updateCase({b, "Zeta Estate", "updated"});
     CHECK(db.getCase(b)->notes == "updated");
 
-    CHECK_THROWS_AS(db.createCase({0, "   ", ""}), DatabaseError);
+    CHECK_NOTHROW(db.createCase({0, "   ", ""}));  // every case field is optional
     CHECK_THROWS_AS(db.updateCase({9999, "Nobody", ""}), DatabaseError);
     CHECK_FALSE(db.getCase(9999));
 }
@@ -330,7 +330,7 @@ TEST_CASE("A version 1 database is upgraded and keeps its data")
     }
 
     Database db(file);
-    CHECK(db.schemaVersion() == 11);
+    CHECK(db.schemaVersion() == 14);
     const auto people = db.listPeople(1);
     REQUIRE(people.size() == 1);
     CHECK(people[0].displayName == "José Núñez");
@@ -568,11 +568,18 @@ TEST_CASE("A version 4 database is upgraded to combined statements")
                 VALUES (1, 1, 'Chase', 'Checking', '1234', 'Chase');
             DROP TABLE IF EXISTS document_templates;
             DROP TABLE IF EXISTS combined_part_owners;
+            DROP TABLE IF EXISTS case_attorneys;
+            DROP TABLE IF EXISTS case_parties;
+            DROP TABLE IF EXISTS attorneys;
+            DROP TABLE IF EXISTS firms;
+            ALTER TABLE cases DROP COLUMN case_type; ALTER TABLE cases DROP COLUMN marriage_date; ALTER TABLE cases DROP COLUMN marriage_place; ALTER TABLE cases DROP COLUMN separation_date; ALTER TABLE cases DROP COLUMN insurance; ALTER TABLE cases DROP COLUMN insurance_carrier; ALTER TABLE cases DROP COLUMN policy_number; ALTER TABLE cases DROP COLUMN group_number; DROP TABLE IF EXISTS case_children; DROP TABLE IF EXISTS case_contacts; ALTER TABLE cases DROP COLUMN cause_number;
+            ALTER TABLE cases DROP COLUMN county;
+            ALTER TABLE cases DROP COLUMN court;
             PRAGMA user_version = 4;
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 11);
+    CHECK(db.schemaVersion() == 14);
     REQUIRE(db.loadAccounts(1).size() == 1);
     CHECK_FALSE(db.loadAccounts(1)[0].isCombined());
     AccountRecord c;
@@ -610,11 +617,18 @@ TEST_CASE("A version 6 database keeps its combined statements, now with typed pa
             INSERT INTO combined_members VALUES (3, 2, 0), (3, 1, 1);
             DROP TABLE IF EXISTS document_templates;
             DROP TABLE IF EXISTS combined_part_owners;
+            DROP TABLE IF EXISTS case_attorneys;
+            DROP TABLE IF EXISTS case_parties;
+            DROP TABLE IF EXISTS attorneys;
+            DROP TABLE IF EXISTS firms;
+            ALTER TABLE cases DROP COLUMN case_type; ALTER TABLE cases DROP COLUMN marriage_date; ALTER TABLE cases DROP COLUMN marriage_place; ALTER TABLE cases DROP COLUMN separation_date; ALTER TABLE cases DROP COLUMN insurance; ALTER TABLE cases DROP COLUMN insurance_carrier; ALTER TABLE cases DROP COLUMN policy_number; ALTER TABLE cases DROP COLUMN group_number; DROP TABLE IF EXISTS case_children; DROP TABLE IF EXISTS case_contacts; ALTER TABLE cases DROP COLUMN cause_number;
+            ALTER TABLE cases DROP COLUMN county;
+            ALTER TABLE cases DROP COLUMN court;
             PRAGMA user_version = 6;
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 11);
+    CHECK(db.schemaVersion() == 14);
     const auto accounts = db.loadAccounts(1);
     REQUIRE(accounts.size() == 3);
     const Account& combined = accounts.back();
@@ -688,11 +702,18 @@ TEST_CASE("A version 5 database is upgraded to opening and closing dates")
                 VALUES (1, 1, 'Chase', 'Checking', '1234', 'Chase', 0);
             DROP TABLE IF EXISTS document_templates;
             DROP TABLE IF EXISTS combined_part_owners;
+            DROP TABLE IF EXISTS case_attorneys;
+            DROP TABLE IF EXISTS case_parties;
+            DROP TABLE IF EXISTS attorneys;
+            DROP TABLE IF EXISTS firms;
+            ALTER TABLE cases DROP COLUMN case_type; ALTER TABLE cases DROP COLUMN marriage_date; ALTER TABLE cases DROP COLUMN marriage_place; ALTER TABLE cases DROP COLUMN separation_date; ALTER TABLE cases DROP COLUMN insurance; ALTER TABLE cases DROP COLUMN insurance_carrier; ALTER TABLE cases DROP COLUMN policy_number; ALTER TABLE cases DROP COLUMN group_number; DROP TABLE IF EXISTS case_children; DROP TABLE IF EXISTS case_contacts; ALTER TABLE cases DROP COLUMN cause_number;
+            ALTER TABLE cases DROP COLUMN county;
+            ALTER TABLE cases DROP COLUMN court;
             PRAGMA user_version = 5;
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 11);
+    CHECK(db.schemaVersion() == 14);
     auto r = *db.getAccount(1);
     CHECK_FALSE(r.openedOn);
     CHECK_FALSE(r.closedOn);
@@ -763,13 +784,13 @@ TEST_CASE("A version 7 database is upgraded and gets an empty template list")
         SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
         old.exec(R"sql(
             DROP TABLE document_templates;
-            DROP TABLE combined_part_owners;
+            DROP TABLE combined_part_owners; ALTER TABLE cases DROP COLUMN case_type; ALTER TABLE cases DROP COLUMN marriage_date; ALTER TABLE cases DROP COLUMN marriage_place; ALTER TABLE cases DROP COLUMN separation_date; ALTER TABLE cases DROP COLUMN insurance; ALTER TABLE cases DROP COLUMN insurance_carrier; ALTER TABLE cases DROP COLUMN policy_number; ALTER TABLE cases DROP COLUMN group_number; DROP TABLE IF EXISTS case_children; DROP TABLE IF EXISTS case_contacts; ALTER TABLE cases DROP COLUMN cause_number; ALTER TABLE cases DROP COLUMN county; ALTER TABLE cases DROP COLUMN court; DROP TABLE case_attorneys; DROP TABLE case_parties; DROP TABLE attorneys; DROP TABLE firms;
             INSERT INTO cases (id, client_name) VALUES (1, 'Old Case');
             PRAGMA user_version = 7;
         )sql");
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 11);
+    CHECK(db.schemaVersion() == 14);
     CHECK(db.getCase(1).has_value());
     CHECK(db.listTemplates().empty());
     CHECK_NOTHROW(db.createTemplate({0, "Letter", "Ltr from {Sender}"}));
@@ -795,7 +816,7 @@ TEST_CASE("Templates can leave the date out, and a version 8 database gets that 
         SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
         old.exec(R"sql(
             DROP TABLE document_templates;
-            DROP TABLE combined_part_owners;
+            DROP TABLE combined_part_owners; ALTER TABLE cases DROP COLUMN case_type; ALTER TABLE cases DROP COLUMN marriage_date; ALTER TABLE cases DROP COLUMN marriage_place; ALTER TABLE cases DROP COLUMN separation_date; ALTER TABLE cases DROP COLUMN insurance; ALTER TABLE cases DROP COLUMN insurance_carrier; ALTER TABLE cases DROP COLUMN policy_number; ALTER TABLE cases DROP COLUMN group_number; DROP TABLE IF EXISTS case_children; DROP TABLE IF EXISTS case_contacts; ALTER TABLE cases DROP COLUMN cause_number; ALTER TABLE cases DROP COLUMN county; ALTER TABLE cases DROP COLUMN court; DROP TABLE case_attorneys; DROP TABLE case_parties; DROP TABLE attorneys; DROP TABLE firms;
             CREATE TABLE document_templates (id INTEGER PRIMARY KEY, name TEXT NOT NULL, pattern TEXT NOT NULL,
                                              allow_period INTEGER NOT NULL DEFAULT 0);
             INSERT INTO document_templates (name, pattern, allow_period) VALUES ('Email', 'Email from {A}', 1);
@@ -803,7 +824,7 @@ TEST_CASE("Templates can leave the date out, and a version 8 database gets that 
         )sql");
     }
     Database upgraded(file);
-    CHECK(upgraded.schemaVersion() == 11);
+    CHECK(upgraded.schemaVersion() == 14);
     REQUIRE(upgraded.listTemplates().size() == 1);
     CHECK(upgraded.listTemplates()[0].useDate);  // existing templates keep their date
 }
@@ -822,12 +843,12 @@ TEST_CASE("Upgrading an older database first leaves a backup copy beside it")
     {
         SQLite::Database raw(utf8FromPath(dbFile), SQLite::OPEN_READWRITE);
         raw.exec("DROP TABLE document_templates");
-        raw.exec("DROP TABLE combined_part_owners");
+        raw.exec("DROP TABLE combined_part_owners; ALTER TABLE cases DROP COLUMN case_type; ALTER TABLE cases DROP COLUMN marriage_date; ALTER TABLE cases DROP COLUMN marriage_place; ALTER TABLE cases DROP COLUMN separation_date; ALTER TABLE cases DROP COLUMN insurance; ALTER TABLE cases DROP COLUMN insurance_carrier; ALTER TABLE cases DROP COLUMN policy_number; ALTER TABLE cases DROP COLUMN group_number; DROP TABLE IF EXISTS case_children; DROP TABLE IF EXISTS case_contacts; ALTER TABLE cases DROP COLUMN cause_number; ALTER TABLE cases DROP COLUMN county; ALTER TABLE cases DROP COLUMN court; DROP TABLE case_attorneys; DROP TABLE case_parties; DROP TABLE attorneys; DROP TABLE firms;");
         raw.exec("PRAGMA user_version = 7");
     }
     {
         Database db(dbFile);
-        CHECK(db.schemaVersion() == 11);
+        CHECK(db.schemaVersion() == 14);
         CHECK(db.listCases().size() == 1);
     }
     const fs::path backup = data.path() / "finrenamer.db.backup-v7";
@@ -876,7 +897,7 @@ TEST_CASE("Templates can attach to the date, and a version 9 database gets that 
         SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
         old.exec(R"sql(
             DROP TABLE document_templates;
-            DROP TABLE combined_part_owners;
+            DROP TABLE combined_part_owners; ALTER TABLE cases DROP COLUMN case_type; ALTER TABLE cases DROP COLUMN marriage_date; ALTER TABLE cases DROP COLUMN marriage_place; ALTER TABLE cases DROP COLUMN separation_date; ALTER TABLE cases DROP COLUMN insurance; ALTER TABLE cases DROP COLUMN insurance_carrier; ALTER TABLE cases DROP COLUMN policy_number; ALTER TABLE cases DROP COLUMN group_number; DROP TABLE IF EXISTS case_children; DROP TABLE IF EXISTS case_contacts; ALTER TABLE cases DROP COLUMN cause_number; ALTER TABLE cases DROP COLUMN county; ALTER TABLE cases DROP COLUMN court; DROP TABLE case_attorneys; DROP TABLE case_parties; DROP TABLE attorneys; DROP TABLE firms;
             CREATE TABLE document_templates (id INTEGER PRIMARY KEY, name TEXT NOT NULL, pattern TEXT NOT NULL,
                                              allow_period INTEGER NOT NULL DEFAULT 0, use_date INTEGER NOT NULL DEFAULT 1);
             INSERT INTO document_templates (name, pattern, allow_period, use_date) VALUES ('Email', 'Email from {A}', 1, 1);
@@ -884,7 +905,7 @@ TEST_CASE("Templates can attach to the date, and a version 9 database gets that 
         )sql");
     }
     Database upgraded(file);
-    CHECK(upgraded.schemaVersion() == 11);
+    CHECK(upgraded.schemaVersion() == 14);
     REQUIRE(upgraded.listTemplates().size() == 1);
     CHECK(upgraded.listTemplates()[0].spaceAfterDate);  // existing templates keep their space
     CHECK(fs::exists(dir.path() / "v9.db.backup-v9"));
@@ -955,10 +976,10 @@ TEST_CASE("A version 10 database gives every account on a combined statement the
     }
     {
         SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
-        old.exec("DROP TABLE combined_part_owners; PRAGMA user_version = 10;");  // as a v10 database was
+        old.exec("DROP TABLE combined_part_owners; ALTER TABLE cases DROP COLUMN case_type; ALTER TABLE cases DROP COLUMN marriage_date; ALTER TABLE cases DROP COLUMN marriage_place; ALTER TABLE cases DROP COLUMN separation_date; ALTER TABLE cases DROP COLUMN insurance; ALTER TABLE cases DROP COLUMN insurance_carrier; ALTER TABLE cases DROP COLUMN policy_number; ALTER TABLE cases DROP COLUMN group_number; DROP TABLE IF EXISTS case_children; DROP TABLE IF EXISTS case_contacts; ALTER TABLE cases DROP COLUMN cause_number; ALTER TABLE cases DROP COLUMN county; ALTER TABLE cases DROP COLUMN court; DROP TABLE case_attorneys; DROP TABLE case_parties; DROP TABLE attorneys; DROP TABLE firms; PRAGMA user_version = 10;");  // as a v10 database was
     }
     Database db(file);
-    CHECK(db.schemaVersion() == 11);
+    CHECK(db.schemaVersion() == 14);
     CHECK(fs::exists(dir.path() / "v10.db.backup-v10"));
     const auto accounts = db.loadAccounts(caseId);
     REQUIRE(accounts.size() == 1);
@@ -966,4 +987,322 @@ TEST_CASE("A version 10 database gives every account on a combined statement the
     CHECK(accountLabel(accounts[0]) == "Chase Chk x1111, Sav x2222 (H; W)");  // the name is unchanged
     REQUIRE(db.getAccount(id)->parts.size() == 2);
     CHECK(db.getAccount(id)->parts[1].ownerIds.size() == 2);
+}
+
+TEST_CASE("A version 11 database is upgraded and gets an empty attorney directory")
+{
+    testing::TempDir dir;
+    const fs::path file = dir.path() / "v11.db";
+    { Database created(file); }
+    {
+        SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
+        old.exec("ALTER TABLE cases DROP COLUMN case_type; ALTER TABLE cases DROP COLUMN marriage_date; ALTER TABLE cases DROP COLUMN marriage_place; ALTER TABLE cases DROP COLUMN separation_date; ALTER TABLE cases DROP COLUMN insurance; ALTER TABLE cases DROP COLUMN insurance_carrier; ALTER TABLE cases DROP COLUMN policy_number; ALTER TABLE cases DROP COLUMN group_number; DROP TABLE IF EXISTS case_children; DROP TABLE IF EXISTS case_contacts; ALTER TABLE cases DROP COLUMN cause_number; ALTER TABLE cases DROP COLUMN county; ALTER TABLE cases DROP COLUMN court; DROP TABLE case_attorneys; DROP TABLE case_parties; DROP TABLE attorneys; DROP TABLE firms; PRAGMA user_version = 11;");
+    }
+    Database db(file);
+    CHECK(db.schemaVersion() == 14);
+    CHECK(fs::exists(dir.path() / "v11.db.backup-v11"));
+    CHECK(db.listFirms().empty());
+    CHECK(db.listAllAttorneys().empty());
+}
+
+TEST_CASE("Firms need a unique name; everything else is optional")
+{
+    auto db = Database::openInMemory();
+    const auto ours = db.createFirm({0, "  Smith & Jones LLP ", "512-555-0100", "512-555-0101", "1 Main St\nAustin, TX", true});
+    const auto other = db.createFirm({0, "Opposing Firm"});
+    CHECK_THROWS_AS(db.createFirm({0, "   "}), DatabaseError);
+    CHECK_THROWS_AS(db.createFirm({0, "smith & jones llp"}), DatabaseError);
+
+    const auto firms = db.listFirms();
+    REQUIRE(firms.size() == 2);
+    CHECK(firms[0].name == "Opposing Firm");
+    CHECK(firms[0].phone.empty());
+    CHECK_FALSE(firms[0].ours);
+    CHECK(firms[1].id == ours);
+    CHECK(firms[1].name == "Smith & Jones LLP");
+    CHECK(firms[1].address == "1 Main St\nAustin, TX");
+    CHECK(firms[1].ours);
+
+    Firm edit = firms[0];
+    edit.fax = "555-0199";
+    db.updateFirm(edit);
+    CHECK(db.listFirms()[0].fax == "555-0199");
+    edit.name = "SMITH & JONES LLP";
+    CHECK_THROWS_AS(db.updateFirm(edit), DatabaseError);
+    db.deleteFirm(other);
+    CHECK(db.listFirms().size() == 1);
+}
+
+TEST_CASE("Attorneys need a name and a firm, and can move between firms")
+{
+    auto db = Database::openInMemory();
+    const auto a = db.createFirm({0, "Firm A"});
+    const auto b = db.createFirm({0, "Firm B"});
+    const auto ann = db.createAttorney({0, a, "Ann Able", "24012345", "ann@example.com"});
+    const auto bob = db.createAttorney({0, a, "Bob Baker"});
+    CHECK_THROWS_AS(db.createAttorney({0, a, "  "}), DatabaseError);
+    CHECK_THROWS_AS(db.createAttorney({0, 999, "Nobody"}), DatabaseError);
+
+    REQUIRE(db.listAttorneys(a).size() == 2);
+    CHECK(db.listAttorneys(a)[0].barNumber == "24012345");
+    CHECK(db.listAttorneys(a)[1].email.empty());
+
+    CHECK_THROWS_AS(db.deleteFirm(a), DatabaseError);  // still has attorneys
+    db.moveAttorney(ann, b);
+    CHECK(db.listAttorneys(a).size() == 1);
+    REQUIRE(db.listAttorneys(b).size() == 1);
+    CHECK(db.listAttorneys(b)[0].name == "Ann Able");
+    CHECK(db.listAttorneys(b)[0].id == ann);  // the same record, not a copy
+    CHECK_THROWS_AS(db.moveAttorney(ann, 999), DatabaseError);
+
+    Attorney edit = db.listAttorneys(a)[0];
+    edit.firmId = b;
+    edit.email = "bob@example.com";
+    db.updateAttorney(edit);
+    CHECK(db.listAttorneys(a).empty());
+    CHECK(db.listAttorneys(b).size() == 2);
+
+    CHECK(db.moveAllAttorneys(b, a) == 2);
+    CHECK(db.listAttorneys(b).empty());
+    db.deleteFirm(b);
+    db.deleteAttorney(bob);
+    REQUIRE(db.listAllAttorneys().size() == 1);
+    CHECK(db.listAllAttorneys()[0].firmId == a);
+}
+
+TEST_CASE("A version 12 database is upgraded to court details, parties and case attorneys")
+{
+    testing::TempDir dir;
+    const fs::path file = dir.path() / "v12.db";
+    std::int64_t caseId = 0, firm = 0, ann = 0;
+    {
+        Database created(file);
+        caseId = created.createCase({0, "Old Case", "notes"});
+        firm = created.createFirm({0, "Alpha Law"});
+        ann = created.createAttorney({0, firm, "Ann Able"});
+    }
+    {
+        SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
+        old.exec("ALTER TABLE cases DROP COLUMN case_type; ALTER TABLE cases DROP COLUMN marriage_date; ALTER TABLE cases DROP COLUMN marriage_place; ALTER TABLE cases DROP COLUMN separation_date; ALTER TABLE cases DROP COLUMN insurance; ALTER TABLE cases DROP COLUMN insurance_carrier; ALTER TABLE cases DROP COLUMN policy_number; ALTER TABLE cases DROP COLUMN group_number; DROP TABLE IF EXISTS case_children; DROP TABLE IF EXISTS case_contacts; ALTER TABLE cases DROP COLUMN cause_number; ALTER TABLE cases DROP COLUMN county;"
+                 " ALTER TABLE cases DROP COLUMN court; DROP TABLE case_attorneys; DROP TABLE case_parties;"
+                 " ALTER TABLE attorneys DROP COLUMN sign_off; PRAGMA user_version = 12;");
+    }
+    Database db(file);
+    CHECK(db.schemaVersion() == 14);
+    CHECK(fs::exists(dir.path() / "v12.db.backup-v12"));
+    const auto c = db.getCase(caseId);
+    REQUIRE(c);
+    CHECK(c->clientName == "Old Case");
+    CHECK(c->notes == "notes");
+    CHECK(c->causeNumber.empty());
+    CHECK(db.listParties(caseId).empty());
+    CHECK(db.listCaseAttorneys(caseId).empty());
+    CHECK(db.listAttorneys(firm).size() == 1);
+    (void)ann;
+}
+
+TEST_CASE("A case keeps its cause number, county and court")
+{
+    auto db = Database::openInMemory();
+    const auto id = db.createCase({0, "Smith", "", " 2026-CI-00123 ", "Travis", "345th District Court"});
+    auto c = *db.getCase(id);
+    CHECK(c.causeNumber == "2026-CI-00123");
+    CHECK(c.county == "Travis");
+    CHECK(c.court == "345th District Court");
+    c.county = "Williamson";
+    db.updateCase(c);
+    CHECK(db.listCases()[0].county == "Williamson");
+    CHECK(db.listCases()[0].court == "345th District Court");
+}
+
+TEST_CASE("Parties have a name and a role, in the order added")
+{
+    auto db = Database::openInMemory();
+    const auto id = db.createCase({0, "Smith"});
+    const auto pat = db.addParty(id, " Pat Smith ", PartyRole::Petitioner);
+    db.addParty(id, "Robin Smith", PartyRole::Respondent);
+    CHECK_NOTHROW(db.deleteParty(db.addParty(id, "  ", PartyRole::Petitioner)));  // a name is optional too
+    CHECK_THROWS_AS(db.addParty(999, "Nobody", PartyRole::Petitioner), DatabaseError);
+    auto parties = db.listParties(id);
+    REQUIRE(parties.size() == 2);
+    CHECK(parties[0].name == "Pat Smith");
+    CHECK(parties[0].role == PartyRole::Petitioner);
+    CHECK(parties[1].role == PartyRole::Respondent);
+    parties[0].role = PartyRole::Respondent;
+    parties[0].name = "Pat Smith-Jones";
+    db.updateParty(parties[0]);
+    CHECK(db.listParties(id)[0].name == "Pat Smith-Jones");
+    CHECK(db.listParties(id)[0].role == PartyRole::Respondent);
+    db.deleteParty(pat);
+    CHECK(db.listParties(id).size() == 1);
+    db.deleteCase(id);
+    CHECK(db.listParties(id).empty());
+}
+
+TEST_CASE("Attorneys from both sides are assigned to a case")
+{
+    auto db = Database::openInMemory();
+    const auto id = db.createCase({0, "Smith"});
+    const auto other = db.createCase({0, "Jones"});
+    const auto ours = db.createFirm({0, "Our Firm", "", "", "", true});
+    const auto zeta = db.createFirm({0, "Zeta Law"});
+    const auto alpha = db.createFirm({0, "Alpha Law"});
+    const auto me = db.createAttorney({0, ours, "Zoe Ours"});
+    const auto a1 = db.createAttorney({0, alpha, "Ann Able"});
+    const auto z1 = db.createAttorney({0, zeta, "Bob Zed"});
+
+    db.setCaseAttorneys(id, {z1, a1, me, a1});  // a repeat is ignored
+    auto on = db.listCaseAttorneys(id);
+    REQUIRE(on.size() == 3);
+    CHECK(on[0].id == me);  // our firm first, then firms by name
+    CHECK(on[1].id == a1);
+    CHECK(on[2].id == z1);
+    db.setCaseAttorneys(other, {a1});
+    CHECK(db.caseCountForAttorney(a1) == 2);
+
+    db.moveAttorney(a1, zeta);  // moving firms keeps them on the case
+    CHECK(db.listCaseAttorneys(id).size() == 3);
+
+    db.removeCaseAttorney(id, z1);
+    CHECK(db.listCaseAttorneys(id).size() == 2);
+    db.deleteAttorney(a1);  // leaving the directory takes them off every case
+    CHECK(db.listCaseAttorneys(id).size() == 1);
+    CHECK(db.listCaseAttorneys(other).empty());
+    CHECK_THROWS_AS(db.setCaseAttorneys(id, {999}), DatabaseError);
+    CHECK(db.listCaseAttorneys(id).size() == 1);  // a refused change changes nothing
+    db.deleteCase(id);
+    CHECK(db.caseCountForAttorney(me) == 0);
+}
+
+TEST_CASE("A version 13 database is upgraded to the full case information")
+{
+    testing::TempDir dir;
+    const fs::path file = dir.path() / "v13.db";
+    std::int64_t caseId = 0, att = 0;
+    {
+        Database created(file);
+        caseId = created.createCase({0, "Old Case", "", "2026-1", "Travis", "345th Judicial District"});
+        created.addParty(caseId, "Pat", PartyRole::Petitioner);
+        att = created.createAttorney({0, created.createFirm({0, "Our Firm", "", "", "", true}), "Ann Able"});
+    }
+    {
+        SQLite::Database old(utf8FromPath(file), SQLite::OPEN_READWRITE);
+        std::string sql;
+        for (const char* c : {"case_type", "marriage_date", "marriage_place", "separation_date", "insurance",
+                              "insurance_carrier", "policy_number", "group_number"})
+            sql += std::string("ALTER TABLE cases DROP COLUMN ") + c + ";";
+        for (const char* c : {"is_client", "address", "city_state_zip", "phone", "dob", "pob", "ssn",
+                              "drivers_license", "car", "employer", "email", "name_change"})
+            sql += std::string("ALTER TABLE case_parties DROP COLUMN ") + c + ";";
+        sql += "DROP TABLE case_children; DROP TABLE case_contacts; ALTER TABLE attorneys DROP COLUMN sign_off;"
+               " PRAGMA user_version = 13;";
+        old.exec(sql);
+    }
+    Database db(file);
+    CHECK(db.schemaVersion() == 14);
+    CHECK(fs::exists(dir.path() / "v13.db.backup-v13"));
+    const auto c = *db.getCase(caseId);
+    CHECK(c.court == "345th Judicial District");
+    CHECK(c.caseType.empty());
+    REQUIRE(db.listParties(caseId).size() == 1);
+    CHECK_FALSE(db.listParties(caseId)[0].ourClient);
+    CHECK(db.listChildren(caseId).empty());
+    CHECK(db.listContacts(caseId).empty());
+    CHECK(db.listAllAttorneys()[0].signOff.empty());
+    (void)att;
+}
+
+TEST_CASE("All of a case's information is kept, and none of it is required")
+{
+    auto db = Database::openInMemory();
+    ClientCase c;
+    c.caseType = "Divorce";
+    c.marriageDate = "6/1/2010";
+    c.marriagePlace = "Austin, Texas";
+    c.separationDate = "1/15/2026";
+    c.insurance = "Health";
+    c.insuranceCarrier = "Carrier Co";
+    c.policyNumber = "P-1";
+    c.groupNumber = "G-2";
+    c.court = "  County Court at Law No. 2 ";
+    const auto id = db.createCase(c);
+    auto got = *db.getCase(id);
+    CHECK(got.clientName.empty());
+    CHECK(caseDisplayName(got) == "(unnamed case)");
+    CHECK(got.caseType == "Divorce");
+    CHECK(got.marriagePlace == "Austin, Texas");
+    CHECK(got.groupNumber == "G-2");
+    CHECK(got.court == "County Court at Law No. 2");
+    got.causeNumber = "D-1-FM-26-1";
+    db.updateCase(got);
+    CHECK(caseDisplayName(*db.getCase(id)) == "Cause No. D-1-FM-26-1");
+    CHECK(db.createCase({}) > id);  // an entirely blank case is fine too
+
+    CaseParty p;
+    p.caseId = id;
+    p.name = "Pat Smith";
+    p.role = PartyRole::Respondent;
+    p.ourClient = true;
+    p.address = "1 Main St";
+    p.cityStateZip = "Austin, TX 78701";
+    p.ssn = "XXX-XX-1234";
+    p.nameChange = "Pat Jones";
+    const auto pid = db.addParty(p);
+    auto parties = db.listParties(id);
+    REQUIRE(parties.size() == 1);
+    CHECK(parties[0].ourClient);
+    CHECK(parties[0].role == PartyRole::Respondent);
+    CHECK(parties[0].cityStateZip == "Austin, TX 78701");
+    CHECK(parties[0].nameChange == "Pat Jones");
+    parties[0].ourClient = false;
+    parties[0].employer = "Acme";
+    db.updateParty(parties[0]);
+    CHECK_FALSE(db.listParties(id)[0].ourClient);
+    CHECK(db.listParties(id)[0].employer == "Acme");
+    (void)pid;
+
+    const auto kid = db.addChild({0, id, "Kim Smith", "", "F", "3/4/2015", "Austin", "Elm Elementary", ""});
+    db.addChild({0, id, "Lee Smith"});
+    auto kids = db.listChildren(id);
+    REQUIRE(kids.size() == 2);
+    CHECK(kids[0].school == "Elm Elementary");
+    kids[1].age = "7";
+    db.updateChild(kids[1]);
+    CHECK(db.listChildren(id)[1].age == "7");
+    db.deleteChild(kid);
+    CHECK(db.listChildren(id).size() == 1);
+
+    db.addContact({0, id, "Prior Counsel", "Old Lawyer", "Old Firm", "123", "9 Elm\nDallas, TX", "", "", "old@x.test"});
+    db.addContact({0, id, "Expert", "Dr. Expert"});
+    auto others = db.listContacts(id);
+    REQUIRE(others.size() == 2);
+    CHECK(others[0].address == "9 Elm\nDallas, TX");
+    CHECK(others[1].role == "Expert");
+    others[1].firm = "Valuation LLC";
+    db.updateContact(others[1]);
+    CHECK(db.listContacts(id)[1].firm == "Valuation LLC");
+    db.deleteContact(others[0].id);
+    CHECK(db.listContacts(id).size() == 1);
+
+    db.deleteCase(id);  // takes its parties, children and other people with it
+    CHECK(db.listParties(id).empty());
+    CHECK(db.listChildren(id).empty());
+    CHECK(db.listContacts(id).empty());
+}
+
+TEST_CASE("An attorney's letter sign-off is kept")
+{
+    auto db = Database::openInMemory();
+    const auto firm = db.createFirm({0, "Our Firm", "", "", "", true});
+    const auto id = db.createAttorney({0, firm, "Ann Able", "1", "ann@x.test", " Very truly yours, "});
+    CHECK(db.listAllAttorneys()[0].signOff == "Very truly yours,");
+    auto a = db.listAllAttorneys()[0];
+    a.signOff.clear();
+    db.updateAttorney(a);
+    CHECK(db.listAttorneys(firm)[0].signOff.empty());
+    const auto c = db.createCase({0, "Smith"});
+    a.signOff = "Regards,";
+    db.updateAttorney(a);
+    db.setCaseAttorneys(c, {id});
+    CHECK(db.listCaseAttorneys(c)[0].signOff == "Regards,");
 }

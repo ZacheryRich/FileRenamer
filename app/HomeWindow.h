@@ -27,6 +27,7 @@ public:
     void openVacationLetters();
     void openPdfUnlocker();
     void openPdfSplitter();
+    void openAttorneyDirectory();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -44,5 +45,5 @@ private:
 
     finrenamer::Database& db_;
     QString dataFolder_;
-    QPointer<QWidget> caseList_, renamer_, deficiency_, bates_, vacation_, unlocker_, splitter_;
+    QPointer<QWidget> caseList_, renamer_, deficiency_, bates_, vacation_, unlocker_, splitter_, attorneys_;
 };

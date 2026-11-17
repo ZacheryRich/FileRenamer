@@ -36,9 +36,36 @@ RenameSession::RenameSession(fs::path root, std::vector<Account> accounts)
     refresh();
 }
 
-void RenameSession::setAccounts(std::vector<Account> accounts)
+void RenameSession::setAccounts(std::vector<Account> accounts,
+                                const std::vector<std::pair<std::string, std::string>>& numberCorrections)
 {
+    // The number each unfinished row shows now, in terms of the old accounts.
+    std::vector<std::string> shown(rows_.size());
+    for (std::size_t i = 0; i < rows_.size(); ++i) {
+        const SessionRow& r = rows_[i];
+        if (r.done || !r.accountId) continue;
+        const Account* old = findAccount(*r.accountId);
+        if (!old || old->isCombined()) continue;
+        shown[i] = r.number.empty() ? old->lastFour : r.number;
+        for (const auto& [from, to] : numberCorrections)
+            if (shown[i] == from) {
+                shown[i] = to;
+                break;
+            }
+    }
+
     accounts_ = std::move(accounts);
+
+    for (std::size_t i = 0; i < rows_.size(); ++i) {
+        SessionRow& r = rows_[i];
+        if (shown[i].empty() || !r.accountId) continue;
+        const Account* now = findAccount(*r.accountId);
+        if (!now || now->isCombined()) continue;
+        const bool older = std::find(now->previousLastFour.begin(), now->previousLastFour.end(), shown[i]) !=
+                           now->previousLastFour.end();
+        if (shown[i] == now->lastFour || !older) r.number.clear();  // current, or no longer a number of it
+        else r.number = shown[i];                                     // kept: now one of the older numbers
+    }
 }
 
 const Account* RenameSession::findAccount(std::int64_t id) const

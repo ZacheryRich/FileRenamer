@@ -91,7 +91,7 @@ DeficiencyDialog::DeficiencyDialog(Database& db, std::int64_t caseId, QWidget* p
     setWindowFlags(windowFlags() | Qt::WindowMaximizeButtonHint);
     std::optional<ClientCase> c;
     runGuarded(this, [&] { c = db_.getCase(caseId_); });
-    caseName_ = c ? qstr(c->clientName) : QString();
+    caseName_ = c ? qstr(caseDisplayName(*c)) : QString();
     setWindowTitle(tr("Deficiency List - %1").arg(caseName_));
 
     auto* intro = new QLabel(tr(

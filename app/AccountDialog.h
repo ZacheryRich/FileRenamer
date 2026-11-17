@@ -33,6 +33,8 @@ public:
     ~AccountDialog() override;
 
     std::int64_t savedAccountId() const { return savedId_; }
+    // Existing numbers whose text was edited (typo fixes), old -> new.
+    finrenamer::Database::NumberCorrections numberCorrections() const;
 
     // True if "New Person..." added someone, so the caller should refresh its list.
     bool addedPeople() const { return addedPeople_; }
@@ -64,7 +66,6 @@ private:
 
     // Account numbers list: newest first, the top one is current.
     std::vector<std::string> numbers() const;
-    finrenamer::Database::NumberCorrections numberCorrections() const;
     void addNumber();
     void removeNumber();
     void moveNumber(int delta);

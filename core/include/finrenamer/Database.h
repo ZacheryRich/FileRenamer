@@ -98,6 +98,32 @@ public:
     std::optional<ClientCase> getCase(std::int64_t caseId) const;
     std::vector<ClientCase> listCases() const;     // sorted by client name
 
+    // ---- Parties (name + Petitioner/Respondent), in the order they were added ----
+    // Every field of a party (name included) is optional.
+    std::vector<CaseParty> listParties(std::int64_t caseId) const;
+    std::int64_t addParty(std::int64_t caseId, const std::string& name, PartyRole role);
+    std::int64_t addParty(const CaseParty& p);  // p.caseId; p.id is ignored
+    void updateParty(const CaseParty& p);
+    void deleteParty(std::int64_t partyId);
+
+    // ---- Children and other people on a case (all fields optional), in the order added ----
+    std::vector<CaseChild> listChildren(std::int64_t caseId) const;
+    std::int64_t addChild(const CaseChild& c);
+    void updateChild(const CaseChild& c);
+    void deleteChild(std::int64_t childId);
+    std::vector<CaseContact> listContacts(std::int64_t caseId) const;
+    std::int64_t addContact(const CaseContact& c);
+    void updateContact(const CaseContact& c);
+    void deleteContact(std::int64_t contactId);
+
+    // ---- Attorneys on the case (from the attorney directory: ours and opposing) ----
+    // Sorted: our firm's attorneys first, then by firm name, then by name. An attorney who
+    // moves firms stays on their cases; deleting an attorney from the directory takes them off.
+    std::vector<Attorney> listCaseAttorneys(std::int64_t caseId) const;
+    void setCaseAttorneys(std::int64_t caseId, const std::vector<std::int64_t>& attorneyIds);
+    void removeCaseAttorney(std::int64_t caseId, std::int64_t attorneyId);
+    std::size_t caseCountForAttorney(std::int64_t attorneyId) const;
+
     // ---- People ---------------------------------------------------------
     // A blank display name means "use the full name in filenames".
     // Full names and display names must each be unique within a case.
@@ -134,6 +160,22 @@ public:
     std::int64_t createTemplate(const DocumentTemplate& t);  // t.id is ignored
     void updateTemplate(const DocumentTemplate& t);
     void deleteTemplate(std::int64_t id);
+
+    // ---- Attorney directory (shared by all cases) ----------------------------
+    // Firm names are unique ignoring letter case; a firm needs a name, an attorney needs a name
+    // and a firm; everything else may be blank. Violations throw DatabaseError.
+    std::vector<Firm> listFirms() const;                  // sorted by name
+    std::int64_t createFirm(const Firm& f);               // f.id is ignored
+    void updateFirm(const Firm& f);
+    void deleteFirm(std::int64_t firmId);                 // refused while it still has attorneys
+    std::vector<Attorney> listAttorneys(std::int64_t firmId) const;  // sorted by name
+    std::vector<Attorney> listAllAttorneys() const;       // sorted by name
+    std::int64_t createAttorney(const Attorney& a);       // a.id is ignored
+    void updateAttorney(const Attorney& a);               // a.firmId may change: that moves the attorney
+    void moveAttorney(std::int64_t attorneyId, std::int64_t newFirmId);
+    // Moves every attorney of one firm to another; returns how many moved.
+    std::size_t moveAllAttorneys(std::int64_t fromFirmId, std::int64_t toFirmId);
+    void deleteAttorney(std::int64_t attorneyId);
 
     // Names this case's accounts used before edits changed them (recorded
     // automatically by updateAccount/updatePerson), for the name fixer.

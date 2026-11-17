@@ -109,7 +109,7 @@ RenameWindow::RenameWindow(Database& db, std::int64_t caseId, QWidget* parent)
     setWindowFlags(windowFlags() | Qt::WindowMinMaxButtonsHint);
     std::optional<ClientCase> c;
     runGuarded(this, [&] { c = db_.getCase(caseId_); });
-    setWindowTitle(tr("File Renamer - %1").arg(c ? qstr(c->clientName) : QString()));
+    setWindowTitle(tr("File Renamer - %1").arg(c ? qstr(caseDisplayName(*c)) : QString()));
 
     runGuarded(this, [&] { templates_ = db_.listTemplates(); });
     buildUi();
@@ -456,7 +456,7 @@ void RenameWindow::refreshFolder()
     selectRow(0);
 }
 
-void RenameWindow::reloadAccounts()
+void RenameWindow::reloadAccounts(const Database::NumberCorrections& corrections)
 {
     std::vector<Account> accounts;
     if (!runGuarded(this, [&] { accounts = db_.loadAccounts(caseId_); })) return;
@@ -477,7 +477,7 @@ void RenameWindow::reloadAccounts()
     }
     fillNumbers(keepId.isValid() ? std::optional<std::int64_t>(keepId.toLongLong()) : std::nullopt,
                 keepNumber);
-    if (session_) session_->setAccounts(std::move(accounts));
+    if (session_) session_->setAccounts(std::move(accounts), corrections);
 }
 
 int RenameWindow::accountIndex(std::optional<std::int64_t> id) const
@@ -918,20 +918,9 @@ void RenameWindow::editAccount()
     const bool saved = dialog.exec() == QDialog::Accepted;
     if (!saved) return;
 
-    reloadAccounts();  // keeps the chosen account and number selected where they still exist
-    // A file whose chosen number was removed or corrected goes back to the account's current number.
-    if (session_) {
-        if (const Account* edited = session_->findAccount(accountId)) {
-            for (std::size_t i = 0; i < session_->size(); ++i) {
-                SessionRow& row = session_->row(i);
-                if (row.done || row.accountId != accountId || row.number.empty()) continue;
-                const bool known = row.number == edited->lastFour ||
-                    std::find(edited->previousLastFour.begin(), edited->previousLastFour.end(), row.number) !=
-                        edited->previousLastFour.end();
-                if (!known) row.number.clear();
-            }
-        }
-    }
+    // Files not renamed yet keep the number they were showing (a newer number only becomes a
+    // choice); a corrected number is followed, a removed one falls back to the current number.
+    reloadAccounts(dialog.numberCorrections());
     loadEditor();
     updatePreview();
     updateAccountButtons();

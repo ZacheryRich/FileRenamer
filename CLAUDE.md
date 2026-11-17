@@ -201,6 +201,88 @@ is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a
 - Folders are created only when a file goes into them; undo removes only folders
   that batch created, and only if empty.
 
+## Case details and case documents (user's requests)
+
+- **Every case field is optional** (user's rule: save a case with whatever is known) -- including the client
+  name (`caseDisplayName`: client name, else "Cause No. ...", else "(unnamed case)", used in every list/title)
+  and party/child/other-person names. Case window (`CaseDialog`, objectNames "clientName", "caseType",
+  "causeNumber", "county", "court", "marriageDate", "marriagePlace", "separationDate", "insurance",
+  "insuranceCarrier", "policyNumber", "groupNumber", "notes"): **Court is free text as it should read**
+  (user's choice), e.g. "In the District Court, 345th Judicial District" -- the caption and the letter's Re line
+  print it as typed. The Case List shows cause/county/court under the name ("caseCourt").
+- Case List page = header (File Renamer / Create Document / Update File Names / Deficiency List) + tabs
+  ("caseTabs", remembered as `caseList/tab`): **Case Information** = Parties | Attorneys / Other People |
+  Children; **Accounts** = People | Accounts (the File Renamer's data).
+- **Parties** (table "parties": Name / Role / Our client; "addParty"/"editParty"/"deleteParty"; `PartyDialog` in
+  `CasePeopleDialogs`): name, **Petitioner or Respondent**, **"Our client" tick box** ("ourClient"), and the
+  information-sheet details (address, city/state/ZIP, phone, DOB, POB, SSN, driver's license, car, employer,
+  email, name change; objectNames "party..."). Kept separate from People (H/W/J are account owners). A second
+  party starts as the opposite role. Stored as typed (plain text, unencrypted, local only -- user accepted).
+- **Children** (table "children": Name / DOB / Age / School; `ChildDialog`): name, age (blank = from DOB when
+  shown/filled, `ageOn`), sex, DOB, POB, school, SSN. **Other People** (table "contacts"; `ContactDialog`, role
+  combo editable: Prior Counsel, Third Party, Expert, Guardian ad Litem, Amicus Attorney, Mediator, Other):
+  role, name, firm/organization, bar number, address (multi-line), phone, fax, email.
+- **Attorneys on the case** (box "Attorneys", table "caseAttorneys"; "assignAttorneys" opens `CaseAttorneysDialog`:
+  firm tree "attorneyTree", our firm first, check box per attorney, New Firm/New Attorney/Edit): from the Attorney
+  Directory; side from `Firm::ours`; moving firms keeps them on cases; deleting from the directory takes them off.
+  Each attorney has a **letter sign-off** ("attorneySignOff"; blank = "Sincerely,").
+- Schema v13: cases.cause_number/county/court, case_parties, case_attorneys. **v14**: cases.case_type,
+  marriage_date, marriage_place, separation_date, insurance, insurance_carrier, policy_number, group_number;
+  case_parties.is_client + 11 detail columns; case_children; case_contacts; attorneys.sign_off.
+- **Create Document...** ("createDocument"; `CreateDocumentDialog`): fills **any Word template** with the case
+  (`loadCaseFile` -> `caseMergeData(file, signerId, today)` -> `fillWordTemplate`). Template combo of recently
+  used files (`caseDocuments/templates`, 12) + Browse ("browseTemplate"); "Signed by" ("signer") = our attorneys
+  on the case, remembered per case (`caseDocuments/case<id>/signer`); "check" label lists the template's fields
+  that aren't case information; "Field Names..." ("fieldNames") lists every field (`caseFieldReference`, with
+  Copy List); "openAfter"; Create... asks where to save (default `<template name> - <case>.docx`, folder
+  `caseDocuments/saveFolder`), refuses to overwrite the template. A "Signature" field gets the signer's picture
+  from Vacation Letters' Signatures list. User's choice: **the program picks the signer; each attorney's
+  sign-off fills «SignOff»**, so one letterhead template serves every attorney (SignOff, OurAttorney, Initials).
+- **Template engine** (core `WordTemplate`, pugixml): MERGEFIELDs (complex and fldSimple) replaced keeping the
+  field's rPr; `\* Upper/Lower/Caps/FirstCap`, `\b`/`\f`; names matched by `normalizeHeader`; a paragraph left
+  with no text because its fields were blank is removed (not a table cell's only paragraph, not one carrying
+  sectPr); DATE/TIME kept showing today; headers/footers filled; mail-merge link dropped. **Repeating blocks**
+  (user: "repeat blocks for each", and other people go into the blocks): `Begin_<Group>` ... `End_<Group>`
+  (also `TableStart:`/`TableEnd:`): same paragraph = runs repeat inline; different paragraphs = paragraphs
+  repeat; different table rows = rows repeat; nested blocks; lookup item -> enclosing items -> top fields;
+  marker-only paragraphs removed; unknown group = block removed + reported; unmatched Begin/End reported.
+  Groups: Our (signer first), OPC, Other, Players (OPC then Other; Player_Role "Opposing Counsel" or the role),
+  Children, Client, OpposingParty, Parties, IfChildren/IfNoChildren, IfOPC/IfNoOPC. "OpposingParty" = parties
+  on the other side from the first "Our client" (none ticked -> empty). Address fields: `_Address` (all
+  lines), `_Street`, `_CityStateZip` (last line). Shared internals in `core/src/DocxPackage.h` (signature
+  `ImageStore`, `addImagesToPackage`, `dropMailMergeLink`; also used by VacationLetters).
+- **The user's templates** were marked up by Claude (scratch script, not in the repo): Case Information Sheet
+  (caption fields, IfChildren around "AND IN THE INTEREST OF", court = «Court \* Upper» with the "____ JUDICIAL
+  DISTRICT" line emptied, client/opposing-party value cells, PLAYERS block = Begin_Players..End_Players in the
+  first cell (the empty rows below kept), CHILDREN table rebuilt to one child per set of rows (second child
+  columns removed, value cell gridSpan 3) inside IfChildren, insurance/marriage cells, signature block "ATTORNEY
+  FOR «ClientRole»" (role only: the name wrapped), certificate of service and "approved as to form" as OPC
+  blocks, consent lines) and one Letterhead from the SAN file (OPC block with «OPC_Email», Re line with
+  «Petitioner»/«Respondent», inline IfChildren, «Court», «County»; «SignOff», «OurAttorney», «Initials»/).
+  Footer "Title" / "IMMO/ITIO" left for hand editing. Not built: a "Signature" picture in the letterhead (would
+  remove the blank signing space when there is no picture).
+
+- **Import from the client Information Form** (user: "pull the info from the fillable field in this file to
+  auto populate the case"; the firm's 4-page "Information Form Part I" fillable PDF, 124 fields). Core
+  `InfoForm`: `readPdfFormFields` (qpdf; radio = state name, "/Off" -> ""; password error points to PDF
+  Unlocker) -> `parseInfoForm` (field names looked up **exactly first** -- the form has names differing only by
+  case, "Phone numbers Cell" = client vs "Phone Numbers Cell" = opposing -- then by `normalizeHeader`; client =
+  unsuffixed fields, opposing = `_2`/`_4`/`_5`; children rows 1-6 (note the form's "Rowe3".."Rowe6" typo);
+  /Choice1//Choice2 mapped to labels) -> `planFormImport` -> `applyFormChanges`. `fieldsFound == 0` = not the
+  form. Decisions (announced defaults): **"New from Form..."** ("newCaseFromForm", under the Cases buttons; also
+  File menu) creates a case, **"Fill from Form..."** ("fillFromForm", case header) updates the selected one;
+  `ImportFormDialog` lists every value (tree "changes", sections Case / Our client / Opposing party / Child: ... /
+  Attorneys / Notes, columns Field / From the form / In the case now; "tickAll"/"untickAll"; "import" = "Create
+  Case" or "Import"); **a value that would replace a different one already in the case starts unticked**, equal
+  values are left out; the case name is only offered when blank. **The client's side is asked**
+  ("clientPetitioner"/"clientRespondent", hidden when the client party already exists); the client = party
+  ticked Our client, else same name; opposing = other role, else same name; a new opposing party gets the other
+  role. Children match by name (one "Add this child" row each when new). **Opposing attorney added only on an
+  exact, unique Attorney Directory match**, else the name goes in the notes. **Everything else (maiden names,
+  county/years, mailing address, physical description, job/salary/education, children's address, disabilities,
+  property, ...) is appended to the case Notes** under "From the Information Form (<file>, imported <date>):".
+  Folder remembered as `infoForm/lastDir`.
+
 ## Other decisions
 
 - Every new case starts with people **Husband (H), Wife (W), Joint (J)**;
@@ -240,8 +322,12 @@ is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a
   reordering numbers needs no question (the user rejected a typo-or-new-number popup).
 - **Edit Account... on the rename screen** (button "editAccount", next to New Account..., enabled
   when an account is chosen): opens the same `AccountDialog` as the Case List; afterwards the
-  account list and preview refresh, a row whose chosen number was removed/corrected falls back
-  to the account's current number, and the same "Update them now?" popup is offered. The
+  account list and preview refresh and the same "Update them now?" popup is offered. **Files not
+  renamed yet keep the number they were showing** (user's request: adding a newer number used to move
+  every row that was on "current" onto it): `RenameSession::setAccounts(accounts, numberCorrections)`
+  pins such rows to their old number (it is now one of the older ones), so a new number only becomes a
+  choice in the Number dropdown; a corrected number (typo fix) is followed; a removed one falls back to
+  the current number. (`SessionRow::number` empty still means "the current number".) The
   popup logic is shared (`accountNameSet` / `offerNameUpdate` in `UpdateNamesDialog`), used by
   `MainWindow` too.
 - After **any account or person edit that changes a file or folder name** (institution,
@@ -377,7 +463,7 @@ is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a
     "browseWorkbook", "browseTemplate", "reload", "search", "attorney", "paralegal", "county",
     "cases" (checkbox column 0, sheet row in `Qt::UserRole`), "selectShown", "clearSelection",
     "selectedCount", "form", "field_<normalized column>" (e.g. "field_county"), "newCase",
-    "revert", "saveCase", "deleteCase", "status", "createLetters", "close".
+    "revert", "saveCase", "deleteCase", "opposingCounsel", "status", "createLetters", "close".
   - **Signatures** ("Signatures..." button, objectName "signatures", next to the template row;
     `SignaturesDialog`): a list of attorney -> signature picture (PNG/JPEG), add/change/remove as
     attorneys join or leave, saved at once in settings.ini under `vacation/signatures` (array of
@@ -393,6 +479,33 @@ is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a
     (formatting kept) instead of removing the row, so no other row moves and nothing that refers to rows
     (formulas, merged cells, filters, table) can break; the case leaves the list (blank rows are ignored) and a
     later New Case still goes below the last used row. Same conflict check and `.saving` write as a save.
+  - **Opposing Counsel...** (button "opposingCounsel" in the edit form; `OpposingCounselDialog`; user's request):
+    picks the case's opposing counsel from the **Attorney Directory**. **Any number of opposing firms**: a list of
+    rows ("entries") with **Add Firm / Remove Firm** (+ Move Up / Move Down, decided default: order matters);
+    for the selected row a **firm** dropdown (opposing-counsel firms not already on another row) and a **check box
+    per attorney** of that firm, with **New Firm... / Edit Firm... / New Attorney... / Edit Attorney...** (the
+    shared editors in `DirectoryEditors`; saved to the directory at once; a new attorney is ticked). A firm with
+    exactly one attorney ticks them when chosen (decided default). "Use These" fills the **form** only -- Save to
+    Spreadsheet writes it (same conflict check as any edit). The sheet keeps **plain text in its existing columns**
+    (others use the sheet without this program; the template reads those columns), so nothing about the
+    workbook or template changes -- `opposingCounselText` (core `VacationCounsel`): first firm -> OPC (its ticked
+    attorneys, one per line), OPC Firm Name, OPC Address; every further firm -> OPC 2 Address as blocks
+    (attorneys, firm name, address; blank line between); eService Email = all ticked attorneys' emails joined
+    "; " (repeats dropped), **left unchanged if none has an email**. Phone/fax are not written. Reopening reads the
+    form back (`matchOpposingCounsel`: exact, case-insensitive firm name and attorney names within that firm;
+    OPC 2 Address blocks split on blank lines, the first line naming a directory firm is the firm, lines above
+    it its attorneys); text that matches nothing is **listed in an orange note** ("unmatched") and replaced only if
+    the user clicks Use These -- never guessed. Missing columns are skipped with a status note. objectNames:
+    "caseTitle", "unmatched", "entries", "addEntry", "removeEntry", "entryUp", "entryDown", "firm", "newFirm",
+    "editFirm", "firmDetails", "attorneys" (checkable, attorney id in `Qt::UserRole`), "newAttorney",
+    "editAttorney", "preview", "useThese", "cancel". `VacationDialog` now takes the `Database&`.
+    **Pro Se** (the other party represents themselves): user's decision -- **everything typed by hand, no
+    auto-filling** (a first version with a typed Pro Se row written as name / "Pro Se" / address was removed at
+    the user's request). The window's "Pro Se (Type by Hand)" button (objectName "proSe") closes it with result
+    `OpposingCounselDialog::kProSe` and **changes nothing**; VacationDialog puts the cursor in the form's OPC box
+    and says to type the party's details there. A pro se case reopened in the window shows its text in the
+    orange "not in the directory" note, as any hand-typed text does.
+    Not built: the "Counsel" column (the "Dear ..." line) is still typed by hand.
   - Not built: removing the row itself / closing the gap (do it in Excel), editing other tabs, one-file-per-case output.
 
 - **PDF Unlocker** (start-screen tile "pdfUnlocker"; `UnlockDialog`; no case needed): like SysTools'
@@ -455,6 +568,25 @@ is typed by the user (cleaned with `sanitizeComponent`), except fixed words in a
   "everyN", "clearMarks", "parts", "preview", "outputFolder", "browseOutput", "openOutput", "split",
   "summary", "close". Setting: `split/lastDir`.
 
+- **Attorney Directory** (start-screen tile "attorneyDirectory"; `AttorneyDialog`; no case needed): the user's
+  list of law firms -- **ours and opposing counsel** -- and their attorneys, typed in by hand as they come up.
+  User's spec: a firm has name, phone, fax, address; an attorney has name, bar number, email; **only the firm
+  name and the attorney name are required**; attorneys can be **moved to another firm** when they change firms.
+  Decided defaults (the user gave the spec, not the details): a firm also has a **type** (Our firm / Opposing
+  counsel; `Firm::ours`; a new firm starts as opposing counsel unless the Show filter is on "Our firm"); an
+  attorney belongs to **exactly one firm** (moving reassigns the same record, `moveAttorney`, or by picking another
+  firm in the attorney's edit window; no history of past firms is kept); **Move All Attorneys...** moves a firm's
+  whole roster (mergers); a firm can't be deleted while it has attorneys; firm names unique ignoring case
+  (attorney names need not be unique -- two people can share a name). No validation of email/phone formats. Search
+  matches firm name/phone/fax/address and attorney name/bar number/email; a firm matched by its own details shows
+  all its attorneys, otherwise only the matching ones. Changes save at once. Stored in the shared database
+  (schema v12: `firms`, `attorneys`), not per case. Used by Vacation Letters' Opposing Counsel... window. Not built:
+  linking attorneys to the File Renamer's cases, export to Excel.
+  objectNames: "search", "show", "firms" (Firm/Type/Phone/Attorneys), "newFirm", "editFirm", "deleteFirm",
+  "moveAllAttorneys", "firmTitle", "firmDetails", "attorneys" (Name/Bar Number/Email), "newAttorney", "editAttorney",
+  "moveAttorney", "deleteAttorney", "summary", "close"; firm editor "firmName", "firmType", "firmPhone", "firmFax",
+  "firmAddress"; attorney editor "attorneyName", "attorneyFirm", "attorneyBar", "attorneyEmail".
+
 ## Third-party notices
 
 `THIRD-PARTY-NOTICES.txt` (repo root) holds the required notices and full licence texts for
@@ -472,7 +604,7 @@ component list comes from the Linux Qt 6.12.0 build's SBOM, not the user's Windo
     CMakeLists.txt          options FINRENAMER_BUILD_APP / FINRENAMER_BUILD_TESTS
     CMakePresets.json       "vs2022" configure preset (Qt path), debug/release build presets
     core/                   static library, NO Qt -- all logic, unit-tested
-      Models.h              ClientCase, Person{fullName, displayName}, Account
+      Models.h              ClientCase (+ court/case details), caseDisplayName, CaseParty/PartyRole, CaseChild, CaseContact, Person{fullName, displayName}, Account, Firm, Attorney
       DateSpec              variant<SingleDate, Period, Quarter, WholeYear, YearMonth>; format, validate,
                             filingYear, nextDateSpec (carry-forward), parseUserDate
       FilenameBuilder       sanitizeComponent, accountLabel, buildFilename, validateAccount
@@ -495,17 +627,25 @@ component list comes from the Linux Qt 6.12.0 build's SBOM, not the user's Windo
       BatesSheet            writeListing, applyBatesLog: the .xlsx layout, via OpenXLSX
       VacationSheet         load the ALL CASES sheet; saveVacationRow patches one row (pugixml + zip), conflict check
       VacationLetters       letterValues, templateMergeFields, writeCombinedLetters (fills the Word template)
+      VacationCounsel       opposingCounselText / matchOpposingCounsel: directory choices <-> the sheet's OPC columns
+      WordTemplate          fillWordTemplate / wordTemplateFields: merge fields, Begin_/End_ repeating blocks (any .docx)
+      CaseDocument          CaseFile, caseMergeData (case -> fields/groups), caseFieldReference, helpers
+      InfoForm              PDF form fields; client Information Form -> case (plan + apply)
       PdfUnlock             inspectPdf / unlockPdf / unlockedCopyPath: remove PDF restrictions/passwords (qpdf)
       PdfSplit              readPdfPages, rangesFromStarts, splitPdf: cut a PDF into files at marked pages (qpdf)
-      Database              SQLite via SQLiteCpp (pimpl; not exposed in headers)
+      Database              SQLite via SQLiteCpp (pimpl; not exposed in headers); also the attorney directory
       Utf8Path              pathFromUtf8 / utf8FromPath / utf16Length / caseFoldKey
     app/                    Qt Widgets GUI (static lib finrenamer_ui + FinRenamer.exe)
       main.cpp              opens the DB in AppData, shows HomeWindow
       HomeWindow            start screen: Case List / File Renamer / Deficiency List / Bates Log tiles
       BatesDialog           Bates Log: spreadsheet + List Files + Add Bates Numbers
       CasePickerDialog      "Choose a Case" (filter list; remembers home/lastCase; "New Case..." button "newCase" creates + selects + continues; opens straight into it when there are no cases) for the last two tiles
-      MainWindow            the Case List: cases list | people table + accounts table; File menu
+      MainWindow            the Case List: cases | header + tabs (Case Information: parties, attorneys, other people, children; Accounts: people, accounts); File menu
       CaseDialog, PersonDialog, AccountDialog
+      CaseAttorneysDialog   Assign Attorneys (firm tree with check boxes)
+      CasePeopleDialogs     PartyDialog (role, Our client, details), ChildDialog, ContactDialog
+      CreateDocumentDialog  Create Document...: template, signer, field check, Field Names, fill + save
+      ImportFormDialog      New from Form / Fill from Form: tick what the Information Form puts in the case
       TemplatesDialog       Templates...: add/edit/duplicate/delete file name templates (rename screen's Type list)
       RenameWindow          the rename screen (table + editor left, preview right)
       DateWidgets           DateField (Year/Month/Day boxes + calendar), DateSpecEditor (mode + inputs; setModes limits the modes)
@@ -517,10 +657,13 @@ component list comes from the Linux Qt 6.12.0 build's SBOM, not the user's Windo
       VacationDialog        Vacation Letters: case list (filters, tick boxes), edit form, Create Letters
       UnlockDialog          PDF Unlocker: file list, passwords, output folder, Unlock PDFs
       SplitDialog           PDF Splitter: page list with marks, preview, files to make, Split PDF
+      AttorneyDialog        Attorney Directory: firms | firm details + attorneys; move
+      DirectoryEditors      FirmEditDialog / AttorneyEditDialog + create/edit helpers (shared with Vacation Letters)
+      OpposingCounselDialog Vacation Letters' Opposing Counsel...: opposing firms list, attorney check boxes
       NoticesDialog         Licences...: shows THIRD-PARTY-NOTICES.txt (compiled-in resource)
       QtHelpers.h           qstr/stdstr/toPath/qpath, settingsFile, personLabel,
                             disconnectChildren, runGuarded
-    tests/                  Catch2 v3 (182 tests): core + Database + RenameSession + NameFixer + BatesSheet + DocumentName + Vacation + PdfUnlock + PdfSplit
+    tests/                  Catch2 v3 (213 tests): core + Database + RenameSession + NameFixer + BatesSheet + DocumentName + Vacation + PdfUnlock + PdfSplit + InfoForm
     installer/FinRenamer.iss  Inno Setup script
 
 Dependencies: Qt 6.12 (Widgets, optional Pdf/PdfWidgets), SQLiteCpp 3.3.3, OpenXLSX
@@ -539,7 +682,7 @@ Also qpdf 12.2.0 + zlib + libjpeg-turbo (PDF Unlocker; see that section). Only c
 - **Schema changes**: append a new entry to `kMigrations` in `Database.cpp` and bump
   `kSchemaVersion`; never edit a shipped migration. Add a test that upgrades a
   database in the previous format (see "A version 1 database is upgraded").
-  Current schema version: **11** (v11 combined_part_owners; v10 document_templates.space_after_date; v9 document_templates.use_date; v8 document_templates; v7 combined_parts replaced combined_members; v2 added people.display_name, v3 added
+  Current schema version: **14** (v14 full case information + attorneys.sign_off; v13 case court details + case_parties + case_attorneys; v12 firms + attorneys (Attorney Directory); v11 combined_part_owners; v10 document_templates.space_after_date; v9 document_templates.use_date; v8 document_templates; v7 combined_parts replaced combined_members; v2 added people.display_name, v3 added
   accounts.institution_display, v4 added account_previous_numbers and
   account_name_history, v5 added accounts.is_combined and combined_members, v6 added
   accounts.opened_on and closed_on, "YYYY-MM-DD" or empty).
@@ -554,6 +697,12 @@ Also qpdf 12.2.0 + zlib + libjpeg-turbo (PDF Unlocker; see that section). Only c
   calls `ui::disconnectChildren(this)` first in its destructor (see Lessons).
 - **Aggregate orders** (brace-initializers must follow them; new fields go at the END
   so existing initializers keep working):
+  `ClientCase{id, clientName, notes, causeNumber, county, court, caseType, marriageDate, marriagePlace, separationDate,
+  insurance, insuranceCarrier, policyNumber, groupNumber}`, `CaseParty{id, caseId, name, role, ourClient, address,
+  cityStateZip, phone, dob, pob, ssn, driversLicense, car, employer, email, nameChange}`,
+  `CaseChild{id, caseId, name, age, sex, dob, pob, school, ssn}`,
+  `CaseContact{id, caseId, role, name, firm, barNumber, address, phone, fax, email}`,
+  `Firm{id, name, phone, fax, address, ours}`, `Attorney{id, firmId, name, barNumber, email, signOff}`,
   `Account{id, caseId, institution, institutionDisplay, accountType, lastFour, owners, previousLastFour, combined, openedOn, closedOn}`,
   `AccountRecord{id, caseId, institution, institutionDisplay, accountType, lastFour, ownerIds, previousLastFour, parts, openedOn, closedOn}`,
   `CombinedPart{accountType, lastFour, owners, ownerIds}` (`owners` = display names, filled by `loadAccounts`; `ownerIds` = stored),
@@ -582,12 +731,13 @@ Also qpdf 12.2.0 + zlib + libjpeg-turbo (PDF Unlocker; see that section). Only c
   (installed on the QApplication in `main.cpp`) turns any parented dialog's application modality into
   window modality just before it is shown, so `exec()` calls stay as they are. Update File Names stays
   a modal child of the Case List. Native Windows file pickers are unverified.
-- **Start screen** (`HomeWindow`, what `main.cpp` shows): seven tiles -- **Case List**
+- **Start screen** (`HomeWindow`, what `main.cpp` shows): eight tiles -- **Case List**
   (opens `MainWindow`; the start screen stays open), **File Renamer** (the
   rename screen; the program's name for it is "File Renamer", not "Rename Files") and
-  **Deficiency List**, **Bates Log**, **Vacation Letters**, **PDF Unlocker** and **PDF Splitter**; File Renamer and Deficiency List ask which case via `CasePickerDialog` (last case
+  **Deficiency List**, **Bates Log**, **Vacation Letters**, **PDF Unlocker**, **PDF Splitter** and **Attorney Directory**; File Renamer and Deficiency List ask which case via `CasePickerDialog` (last case
   preselected). Closing the start screen quits the app (`quitOnLastWindowClosed` is off).
-  objectNames: "caseList", "fileRenamer", "deficiencyList", "batesLog", "vacationLetters", "pdfUnlocker", "pdfSplitter"; picker: "filter", "cases", "newCase".
+  objectNames: "caseList", "fileRenamer", "deficiencyList", "batesLog", "vacationLetters", "pdfUnlocker", "pdfSplitter", "attorneyDirectory"; picker: "filter", "cases", "newCase".
+  Case List buttons: "newCase", "editCase", "deleteCase" (plus the boxes' objectNames under Case details).
   **Look** (user asked for the start screen and Case List to match the File Renamer):
   stock Fusion widgets, boxed panels (`QGroupBox`: Cases / People / Accounts), a
   1.5x bold title, and the File Renamer's footer -- information on the left (data
@@ -629,10 +779,10 @@ Also qpdf 12.2.0 + zlib + libjpeg-turbo (PDF Unlocker; see that section). Only c
 
 ## Status and roadmap
 
-Done: core logic, database, case/people/account management, rename screen
+Done: core logic, database, case/people/account management, full case information (parties, children, other people, attorneys) and Create Document (any Word template, repeating blocks), rename screen
 (carry-forward, skip, sorting, partial apply, undo last, refresh), rename history,
 PDF preview, installer, previous account numbers, Update File Names (multi-folder,
-in place), Year/Month/Day date boxes, combined statements, Deficiency List (Word report), Bates Log (list files to Excel, add Bates numbers), Vacation Letters (edit the shared case list, draft letters from the shared template), PDF Unlocker (remove PDF restrictions, open with a known password), PDF Splitter (cut one PDF into files at marked pages), file types on the rename screen
+in place), Year/Month/Day date boxes, combined statements, Deficiency List (Word report), Bates Log (list files to Excel, add Bates numbers), Vacation Letters (edit the shared case list, draft letters from the shared template, opposing counsel from the Attorney Directory), PDF Unlocker (remove PDF restrictions, open with a known password), PDF Splitter (cut one PDF into files at marked pages), Attorney Directory (firms and attorneys, move between firms), file types on the rename screen
 (statement / user-defined templates / other).
 
 Ideas discussed, not built yet (user's choice of order):

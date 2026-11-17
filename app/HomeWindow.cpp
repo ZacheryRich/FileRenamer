@@ -8,6 +8,7 @@
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 
+#include "AttorneyDialog.h"
 #include "BatesDialog.h"
 #include "CasePickerDialog.h"
 #include "DeficiencyDialog.h"
@@ -61,6 +62,8 @@ HomeWindow::HomeWindow(Database& db, const QString& dataFolder, QWidget* parent)
 
     auto* splitter = makeTile("pdfSplitter", tr("PDF Splitter"), tr("Split one big PDF into separate files at the pages you mark"));
 
+    auto* directory = makeTile("attorneyDirectory", tr("Attorney Directory"), tr("Firms and attorneys: ours and opposing counsel"));
+
     auto* central = new QWidget;
     auto* layout = new QVBoxLayout(central);
     layout->addWidget(heading);
@@ -73,6 +76,7 @@ HomeWindow::HomeWindow(Database& db, const QString& dataFolder, QWidget* parent)
     layout->addWidget(vacation);
     layout->addWidget(unlocker);
     layout->addWidget(splitter);
+    layout->addWidget(directory);
     layout->addStretch();
 
     // Footer like the File Renamer's: information on the left, Close on the right.
@@ -101,7 +105,8 @@ HomeWindow::HomeWindow(Database& db, const QString& dataFolder, QWidget* parent)
     connect(vacation, &QPushButton::clicked, this, &HomeWindow::openVacationLetters);
     connect(unlocker, &QPushButton::clicked, this, &HomeWindow::openPdfUnlocker);
     connect(splitter, &QPushButton::clicked, this, &HomeWindow::openPdfSplitter);
-    resize(520, 700);
+    connect(directory, &QPushButton::clicked, this, &HomeWindow::openAttorneyDirectory);
+    resize(520, 770);
 }
 
 HomeWindow::~HomeWindow()
@@ -145,7 +150,7 @@ std::optional<std::int64_t> HomeWindow::chooseCase(const QString& purpose)
 QList<QPointer<QWidget>> HomeWindow::openTools() const
 {
     QList<QPointer<QWidget>> open;
-    for (const QPointer<QWidget>& tool : {caseList_, renamer_, deficiency_, bates_, vacation_, unlocker_, splitter_})
+    for (const QPointer<QWidget>& tool : {caseList_, renamer_, deficiency_, bates_, vacation_, unlocker_, splitter_, attorneys_})
         if (tool && tool->isVisible()) open.append(tool);
     return open;
 }
@@ -223,7 +228,7 @@ void HomeWindow::openBatesLog()
 
 void HomeWindow::openVacationLetters()
 {
-    showTool(vacation_, [] { return new VacationDialog; });
+    showTool(vacation_, [this] { return new VacationDialog(db_); });
 }
 
 void HomeWindow::openPdfUnlocker()
@@ -234,4 +239,9 @@ void HomeWindow::openPdfUnlocker()
 void HomeWindow::openPdfSplitter()
 {
     showTool(splitter_, [] { return new SplitDialog; });
+}
+
+void HomeWindow::openAttorneyDirectory()
+{
+    showTool(attorneys_, [this] { return new AttorneyDialog(db_); });
 }

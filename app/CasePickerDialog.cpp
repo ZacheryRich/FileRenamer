@@ -91,7 +91,7 @@ void CasePickerDialog::selectCase(std::int64_t caseId)
 
 void CasePickerDialog::addItem(const ClientCase& c)
 {
-    auto* item = new QListWidgetItem(qstr(c.clientName), list_);
+    auto* item = new QListWidgetItem(qstr(caseDisplayName(c)), list_);
     item->setData(kIdRole, QVariant::fromValue<qlonglong>(c.id));
 }
 

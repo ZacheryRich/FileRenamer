@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "finrenamer/Database.h"
 #include "finrenamer/VacationSheet.h"
 
 class QComboBox;
@@ -32,7 +33,7 @@ class QTableWidget;
 class VacationDialog : public QDialog {
     Q_OBJECT
 public:
-    explicit VacationDialog(QWidget* parent = nullptr);
+    explicit VacationDialog(finrenamer::Database& db, QWidget* parent = nullptr);
     ~VacationDialog() override;
 
     // Also used by tests.
@@ -41,6 +42,7 @@ public:
     bool reload();                          // re-reads the workbook; false if it couldn't be read
     void deleteCase();                      // empties the chosen case's row in the sheet
     bool saveCase();                        // writes the form to the sheet
+    void chooseOpposingCounsel();           // fills the form's OPC columns from the Attorney Directory
     bool createLetters(const QString& outputPath);  // merges the ticked cases; false if nothing was made
     std::vector<std::size_t> checkedRows() const;   // sheet row numbers
     void setChecked(const std::set<std::size_t>& rows);
@@ -94,10 +96,12 @@ private:
     QPushButton* revertBtn_ = nullptr;
     QPushButton* newBtn_ = nullptr;
     QPushButton* deleteBtn_ = nullptr;
+    QPushButton* opposingBtn_ = nullptr;
 
     QLabel* status_ = nullptr;
     QPushButton* createBtn_ = nullptr;
 
+    finrenamer::Database& db_;
     finrenamer::VacationSheet sheet_;
     bool haveSheet_ = false;
     std::set<std::size_t> checked_;                       // sheet rows ticked for a letter

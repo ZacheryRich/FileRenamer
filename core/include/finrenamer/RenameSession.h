@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "finrenamer/DateSpec.h"
@@ -49,7 +50,13 @@ public:
     const std::filesystem::path& root() const { return root_; }
 
     const std::vector<Account>& accounts() const { return accounts_; }
-    void setAccounts(std::vector<Account> accounts);  // e.g. after adding an account
+    // Replaces the case's accounts (e.g. after adding or editing one). Rows not renamed yet keep
+    // the number they were showing: adding a newer number does not move them onto it (it only
+    // becomes a choice). A row whose number was corrected (old -> new, as passed to
+    // Database::updateAccount) follows the correction; one whose number was removed falls back to
+    // the account's current number.
+    void setAccounts(std::vector<Account> accounts,
+                     const std::vector<std::pair<std::string, std::string>>& numberCorrections = {});
     const Account* findAccount(std::int64_t id) const;
 
     std::size_t size() const { return rows_.size(); }

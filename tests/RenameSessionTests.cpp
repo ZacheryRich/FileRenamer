@@ -277,3 +277,76 @@ TEST_CASE("A file can use an old number; the folder still shows all numbers")
     REQUIRE(s.carryForward(1, 2));
     CHECK(s.row(2).number == "5678");
 }
+
+TEST_CASE("Adding a newer number doesn't move files in progress onto it")
+{
+    testing::TempDir dir;
+    dir.touch("a.pdf");
+    dir.touch("b.pdf");
+    dir.touch("c.pdf");
+    dir.touch("d.pdf");
+    Account card = testing::fidelitySingle();
+    card.lastFour = "5678";
+    card.previousLastFour = {"1234"};
+    RenameSession s(dir.path(), {card});
+    s.row(0).accountId = card.id;  // a: the current number (5678)
+    s.row(1).accountId = card.id;  // b: the older number
+    s.row(1).number = "1234";
+    s.row(2).accountId = card.id;  // c: current, but already renamed
+    s.row(2).done = true;
+    // d: no account
+
+    Account newer = card;
+    newer.lastFour = "9012";
+    newer.previousLastFour = {"5678", "1234"};
+    s.setAccounts({newer});
+    CHECK(s.row(0).number == "5678");  // still the number it showed
+    CHECK(s.row(1).number == "1234");
+    CHECK(s.row(2).number.empty());     // renamed rows are left alone
+    CHECK_FALSE(s.row(3).accountId.has_value());
+    CHECK(s.row(3).number.empty());
+
+    // Moving 5678 back to the top: that row is on the current number again.
+    Account reordered = card;
+    reordered.lastFour = "5678";
+    reordered.previousLastFour = {"9012", "1234"};
+    s.setAccounts({reordered});
+    CHECK(s.row(0).number.empty());
+    CHECK(s.row(1).number == "1234");
+}
+
+TEST_CASE("A corrected number is followed; a removed one falls back to the current number")
+{
+    testing::TempDir dir;
+    dir.touch("a.pdf");
+    dir.touch("b.pdf");
+    Account card = testing::fidelitySingle();
+    card.lastFour = "5678";
+    card.previousLastFour = {"1243"};
+    RenameSession s(dir.path(), {card});
+    s.row(0).accountId = card.id;
+    s.row(1).accountId = card.id;
+    s.row(1).number = "1243";
+
+    // The typo 1243 -> 1234 plus a newer number, in one edit.
+    Account fixed = card;
+    fixed.lastFour = "9012";
+    fixed.previousLastFour = {"5678", "1234"};
+    s.setAccounts({fixed}, {{"1243", "1234"}});
+    CHECK(s.row(0).number == "5678");
+    CHECK(s.row(1).number == "1234");
+
+    // 1234 removed: back to the current number.
+    Account removed = fixed;
+    removed.previousLastFour = {"5678"};
+    s.setAccounts({removed});
+    CHECK(s.row(1).number.empty());
+    CHECK(s.row(0).number == "5678");
+
+    // Correcting the current number itself keeps rows on the current number.
+    s.row(1).number.clear();
+    Account typo = removed;
+    typo.lastFour = "9021";
+    s.setAccounts({typo}, {{"9012", "9021"}});
+    CHECK(s.row(1).number.empty());
+}

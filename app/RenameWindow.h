@@ -42,7 +42,7 @@ public slots:
 private:
     void buildUi();
     void refreshFolder();
-    void reloadAccounts();
+    void reloadAccounts(const finrenamer::Database::NumberCorrections& corrections = {});
     int accountIndex(std::optional<std::int64_t> id) const;
     void fillNumbers(std::optional<std::int64_t> accountId, const std::string& select);
 

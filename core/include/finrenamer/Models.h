@@ -14,7 +14,81 @@ struct ClientCase {
     std::int64_t id = 0;
     std::string clientName;
     std::string notes;
+    // Court details (all optional).
+    std::string causeNumber;
+    std::string county;
+    std::string court;      // free text as it should read in the caption
+    // More case information (all optional; typed as it should print).
+    std::string caseType;
+    std::string marriageDate;
+    std::string marriagePlace;
+    std::string separationDate;
+    std::string insurance;
+    std::string insuranceCarrier;
+    std::string policyNumber;
+    std::string groupNumber;
 };
+
+// "Client name" if there is one, else "Cause No. ...", else "(unnamed case)": every case field is optional.
+inline std::string caseDisplayName(const ClientCase& c)
+{
+    auto blank = [](const std::string& t) { return t.find_first_not_of(" \t\r\n") == std::string::npos; };
+    if (!blank(c.clientName)) return c.clientName;
+    if (!blank(c.causeNumber)) return "Cause No. " + c.causeNumber;
+    return "(unnamed case)";
+}
+
+// A party to the case (separate from the People list, which is only for account owners).
+enum class PartyRole { Petitioner, Respondent };
+
+struct CaseParty {
+    std::int64_t id = 0;
+    std::int64_t caseId = 0;
+    std::string name;
+    PartyRole role = PartyRole::Petitioner;
+    // Everything below is optional and typed as it should print.
+    bool ourClient = false;
+    std::string address;
+    std::string cityStateZip;
+    std::string phone;
+    std::string dob;
+    std::string pob;
+    std::string ssn;
+    std::string driversLicense;
+    std::string car;
+    std::string employer;
+    std::string email;
+    std::string nameChange;  // "Name Change to:"
+};
+
+// A child of the case (all fields optional, typed as they should print).
+struct CaseChild {
+    std::int64_t id = 0;
+    std::int64_t caseId = 0;
+    std::string name;
+    std::string age;     // blank = worked out from the date of birth when a document is made
+    std::string sex;
+    std::string dob;
+    std::string pob;
+    std::string school;
+    std::string ssn;
+};
+
+// Anyone else involved: prior counsel, a third party, an expert... (all optional).
+struct CaseContact {
+    std::int64_t id = 0;
+    std::int64_t caseId = 0;
+    std::string role;    // e.g. "Prior Counsel", "Third Party", "Expert"
+    std::string name;
+    std::string firm;    // firm or organization
+    std::string barNumber;
+    std::string address; // may have line breaks
+    std::string phone;
+    std::string fax;
+    std::string email;
+};
+
+inline const char* partyRoleName(PartyRole r) { return r == PartyRole::Respondent ? "Respondent" : "Petitioner"; }
 
 struct Person {
     std::int64_t id = 0;
@@ -73,6 +147,26 @@ struct OldAccountName {
     std::string name;        // e.g. "Chsae Checking 1234 (H)"
     std::string lastFour;    // for file names: the number files with that name should
                              // now use (the same number, or its corrected text)
+};
+
+// The attorney directory: law firms (ours and opposing counsel) and the attorneys in them.
+// Only the firm name and the attorney's name are required.
+struct Firm {
+    std::int64_t id = 0;
+    std::string name;
+    std::string phone;
+    std::string fax;
+    std::string address;   // may have line breaks
+    bool ours = false;     // true = our firm, false = opposing counsel
+};
+
+struct Attorney {
+    std::int64_t id = 0;
+    std::int64_t firmId = 0;
+    std::string name;
+    std::string barNumber;
+    std::string email;
+    std::string signOff;  // how their letters close, e.g. "Very truly yours,"; blank = "Sincerely,"
 };
 
 }  // namespace finrenamer

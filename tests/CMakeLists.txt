@@ -23,6 +23,10 @@ add_executable(finrenamer_tests
     BatesSheetTests.cpp
     DocumentNameTests.cpp
     VacationTests.cpp
+    VacationCounselTests.cpp
+    WordTemplateTests.cpp
+    CaseDocumentTests.cpp
+    InfoFormTests.cpp
     PdfUnlockTests.cpp
     PdfSplitTests.cpp
 )

@@ -141,6 +141,10 @@ add_library(finrenamer_core STATIC
     src/Utf8Path.cpp
     src/VacationLetters.cpp
     src/VacationSheet.cpp
+    src/VacationCounsel.cpp
+    src/WordTemplate.cpp
+    src/CaseDocument.cpp
+    src/InfoForm.cpp
 )
 
 target_include_directories(finrenamer_core PUBLIC include)

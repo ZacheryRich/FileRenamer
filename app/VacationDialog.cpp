@@ -27,7 +27,9 @@
 #include <QVBoxLayout>
 #include <algorithm>
 
+#include "OpposingCounselDialog.h"
 #include "QtHelpers.h"
+#include "finrenamer/VacationCounsel.h"
 #include "SignaturesDialog.h"
 #include "finrenamer/VacationLetters.h"
 
@@ -75,7 +77,7 @@ QString todayText()
 
 }  // namespace
 
-VacationDialog::VacationDialog(QWidget* parent) : QDialog(parent)
+VacationDialog::VacationDialog(Database& db, QWidget* parent) : QDialog(parent), db_(db)
 {
     setWindowTitle(tr("Vacation Letters - %1").arg(appTitle()));
     setWindowFlags(windowFlags() | Qt::WindowMaximizeButtonHint);
@@ -201,6 +203,10 @@ void VacationDialog::buildUi()
     deleteBtn_ = new QPushButton(tr("Delete Case..."));
     deleteBtn_->setObjectName("deleteCase");
     deleteBtn_->setAutoDefault(false);
+    opposingBtn_ = new QPushButton(tr("Opposing Counsel..."));
+    opposingBtn_->setObjectName("opposingCounsel");
+    opposingBtn_->setAutoDefault(false);
+    opposingBtn_->setToolTip(tr("Choose this case's opposing firms and attorneys from the Attorney Directory"));
     revertBtn_ = new QPushButton(tr("Revert"));
     revertBtn_->setObjectName("revert");
     revertBtn_->setAutoDefault(false);
@@ -210,6 +216,7 @@ void VacationDialog::buildUi()
     auto* editButtons = new QHBoxLayout;
     editButtons->addWidget(newBtn_);
     editButtons->addWidget(deleteBtn_);
+    editButtons->addWidget(opposingBtn_);
     editButtons->addStretch();
     editButtons->addWidget(revertBtn_);
     editButtons->addWidget(saveBtn_);
@@ -284,6 +291,7 @@ void VacationDialog::buildUi()
     });
     connect(saveBtn_, &QPushButton::clicked, this, [this] { saveCase(); });
     connect(deleteBtn_, &QPushButton::clicked, this, [this] { deleteCase(); });
+    connect(opposingBtn_, &QPushButton::clicked, this, [this] { chooseOpposingCounsel(); });
     connect(createBtn_, &QPushButton::clicked, this, &VacationDialog::chooseOutputAndCreate);
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::reject);
 
@@ -567,6 +575,7 @@ void VacationDialog::updateButtons()
     clearSelection_->setEnabled(!checked_.empty());
     newBtn_->setEnabled(loaded);
     deleteBtn_->setEnabled(loaded && editing_ && *editing_ != 0);
+    opposingBtn_->setEnabled(loaded && editing_ && (sheet_.column("OPC") >= 0 || sheet_.column("OPC Firm Name") >= 0));
     saveBtn_->setEnabled(loaded && editing_ && dirty_);
     revertBtn_->setEnabled(loaded && editing_ && dirty_);
     createBtn_->setEnabled(loaded && !checked_.empty() && !templatePath().isEmpty());
@@ -733,6 +742,64 @@ void VacationDialog::deleteCase()
     if (!reload()) return;
     loadForm(std::nullopt);
     report(tr("Deleted row %1 from the spreadsheet.").arg(row));
+}
+
+void VacationDialog::chooseOpposingCounsel()
+{
+    if (!haveSheet_ || !editing_) return;
+    const int cNames = sheet_.column("OPC");
+    const int cFirm = sheet_.column("OPC Firm Name");
+    const int cAddress = sheet_.column("OPC Address");
+    const int cOthers = sheet_.column("OPC 2 Address");
+    const int cEmail = sheet_.column("eService Email");
+    auto text = [&](int c) { return c >= 0 && c < static_cast<int>(fields_.size()) ? stdstr(fields_[static_cast<std::size_t>(c)]->toPlainText()) : std::string(); };
+
+    // Start from what the form holds now (including unsaved typing), matched to the directory.
+    std::vector<Firm> firms;
+    std::vector<Attorney> attorneys;
+    if (!runGuarded(this, [&] {
+            firms = db_.listFirms();
+            attorneys = db_.listAllAttorneys();
+        }))
+        return;
+    const auto match = matchOpposingCounsel(text(cNames), text(cFirm), text(cOthers), firms, attorneys);
+
+    const int cClient = sheet_.column("Client (Co-Counsel)");
+    QString title = *editing_ == 0 ? tr("New case") : tr("Row %1").arg(*editing_);
+    if (cClient >= 0 && !text(cClient).empty()) title += ": " + oneLine(text(cClient));
+    OpposingCounselDialog dlg(db_, title, match.choices, match.unmatched, this);
+    const int result = dlg.exec();
+    if (result == OpposingCounselDialog::kProSe) {
+        // Pro se: nothing is filled in; the user types the party's details into the boxes.
+        const int first = cNames >= 0 ? cNames : cFirm;
+        if (first >= 0 && first < static_cast<int>(fields_.size())) {
+            auto* box = fields_[static_cast<std::size_t>(first)];
+            formArea_->ensureWidgetVisible(box);
+            box->setFocus();
+        }
+        report(tr("Pro se: type the party's name, address and email into the OPC boxes, then click Save to Spreadsheet."));
+        return;
+    }
+    if (result != QDialog::Accepted) return;
+
+    const auto chosen = dlg.choices();
+    const auto out = opposingCounselText(chosen);
+    auto put = [&](int c, const std::string& value) {
+        if (c >= 0 && c < static_cast<int>(fields_.size())) fields_[static_cast<std::size_t>(c)]->setPlainText(qstr(value));
+    };
+    put(cNames, out.names);
+    put(cFirm, out.firmName);
+    put(cAddress, out.address);
+    put(cOthers, out.others);
+    if (!out.emails.empty()) put(cEmail, out.emails);
+
+    QStringList notes;
+    if (cOthers < 0 && chosen.size() > 1)
+        notes << tr("The sheet has no \"OPC 2 Address\" column, so only the first firm was filled in.");
+    if (cAddress < 0 && !out.address.empty()) notes << tr("The sheet has no \"OPC Address\" column.");
+    if (out.emails.empty() && cEmail >= 0) notes << tr("eService Email was left as it was (no ticked attorney has an email).");
+    report(tr("Opposing counsel filled in from the Attorney Directory. Click Save to Spreadsheet to keep it.") +
+           (notes.isEmpty() ? QString() : "  " + notes.join("  ")));
 }
 
 // ---- letters --------------------------------------------------------------------------------------------

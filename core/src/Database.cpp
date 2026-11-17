@@ -15,7 +15,7 @@ namespace finrenamer {
 
 namespace {
 
-constexpr int kSchemaVersion = 11;
+constexpr int kSchemaVersion = 14;
 
 // Each entry upgrades the schema by one version. Never edit a shipped entry;
 // add a new one instead, so existing databases upgrade in place.
@@ -195,6 +195,84 @@ const char* const kMigrations[] = {
     INSERT INTO combined_part_owners (combined_id, part_position, person_id, position)
         SELECT cp.combined_id, cp.position, ao.person_id, ao.position
         FROM combined_parts cp JOIN account_owners ao ON ao.account_id = cp.combined_id;
+    )sql",
+    // v12: the attorney directory.
+    R"sql(
+    CREATE TABLE firms (
+        id       INTEGER PRIMARY KEY,
+        name     TEXT NOT NULL COLLATE NOCASE UNIQUE,
+        phone    TEXT NOT NULL DEFAULT '',
+        fax      TEXT NOT NULL DEFAULT '',
+        address  TEXT NOT NULL DEFAULT '',
+        is_ours  INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE attorneys (
+        id         INTEGER PRIMARY KEY,
+        firm_id    INTEGER NOT NULL REFERENCES firms(id),
+        name       TEXT NOT NULL,
+        bar_number TEXT NOT NULL DEFAULT '',
+        email      TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX attorneys_by_firm ON attorneys(firm_id);
+    )sql",
+    // v13: court details, parties and attorneys on a case.
+    R"sql(
+    ALTER TABLE cases ADD COLUMN cause_number TEXT NOT NULL DEFAULT '';
+    ALTER TABLE cases ADD COLUMN county TEXT NOT NULL DEFAULT '';
+    ALTER TABLE cases ADD COLUMN court TEXT NOT NULL DEFAULT '';
+    CREATE TABLE case_parties (
+        id       INTEGER PRIMARY KEY,
+        case_id  INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+        name     TEXT NOT NULL,
+        role     TEXT NOT NULL CHECK (role IN ('Petitioner', 'Respondent')),
+        position INTEGER NOT NULL
+    );
+    CREATE TABLE case_attorneys (
+        case_id     INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+        attorney_id INTEGER NOT NULL REFERENCES attorneys(id) ON DELETE CASCADE,
+        PRIMARY KEY (case_id, attorney_id)
+    );
+    )sql",
+    // v14: case information for documents (all optional): more case fields, party details,
+    // children, other people, and each attorney's letter sign-off.
+    R"sql(
+    ALTER TABLE cases ADD COLUMN case_type TEXT NOT NULL DEFAULT '';
+    ALTER TABLE cases ADD COLUMN marriage_date TEXT NOT NULL DEFAULT '';
+    ALTER TABLE cases ADD COLUMN marriage_place TEXT NOT NULL DEFAULT '';
+    ALTER TABLE cases ADD COLUMN separation_date TEXT NOT NULL DEFAULT '';
+    ALTER TABLE cases ADD COLUMN insurance TEXT NOT NULL DEFAULT '';
+    ALTER TABLE cases ADD COLUMN insurance_carrier TEXT NOT NULL DEFAULT '';
+    ALTER TABLE cases ADD COLUMN policy_number TEXT NOT NULL DEFAULT '';
+    ALTER TABLE cases ADD COLUMN group_number TEXT NOT NULL DEFAULT '';
+    ALTER TABLE case_parties ADD COLUMN is_client INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE case_parties ADD COLUMN address TEXT NOT NULL DEFAULT '';
+    ALTER TABLE case_parties ADD COLUMN city_state_zip TEXT NOT NULL DEFAULT '';
+    ALTER TABLE case_parties ADD COLUMN phone TEXT NOT NULL DEFAULT '';
+    ALTER TABLE case_parties ADD COLUMN dob TEXT NOT NULL DEFAULT '';
+    ALTER TABLE case_parties ADD COLUMN pob TEXT NOT NULL DEFAULT '';
+    ALTER TABLE case_parties ADD COLUMN ssn TEXT NOT NULL DEFAULT '';
+    ALTER TABLE case_parties ADD COLUMN drivers_license TEXT NOT NULL DEFAULT '';
+    ALTER TABLE case_parties ADD COLUMN car TEXT NOT NULL DEFAULT '';
+    ALTER TABLE case_parties ADD COLUMN employer TEXT NOT NULL DEFAULT '';
+    ALTER TABLE case_parties ADD COLUMN email TEXT NOT NULL DEFAULT '';
+    ALTER TABLE case_parties ADD COLUMN name_change TEXT NOT NULL DEFAULT '';
+    CREATE TABLE case_children (
+        id       INTEGER PRIMARY KEY,
+        case_id  INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL,
+        name TEXT NOT NULL DEFAULT '', age TEXT NOT NULL DEFAULT '', sex TEXT NOT NULL DEFAULT '',
+        dob TEXT NOT NULL DEFAULT '', pob TEXT NOT NULL DEFAULT '', school TEXT NOT NULL DEFAULT '',
+        ssn TEXT NOT NULL DEFAULT ''
+    );
+    CREATE TABLE case_contacts (
+        id       INTEGER PRIMARY KEY,
+        case_id  INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL,
+        role TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '', firm TEXT NOT NULL DEFAULT '',
+        bar_number TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '',
+        fax TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT ''
+    );
+    ALTER TABLE attorneys ADD COLUMN sign_off TEXT NOT NULL DEFAULT '';
     )sql",
 };
 
@@ -722,15 +800,43 @@ std::vector<NewPerson> defaultCasePeople()
     return {{"Husband", "H"}, {"Wife", "W"}, {"Joint", "J"}};
 }
 
+namespace {
+
+const char* kCaseColumns =
+    "id, client_name, notes, cause_number, county, court, case_type, marriage_date, marriage_place,"
+    " separation_date, insurance, insurance_carrier, policy_number, group_number";
+
+ClientCase readCase(SQLite::Statement& q)
+{
+    ClientCase c;
+    c.id = q.getColumn(0).getInt64();
+    std::string* text[] = {&c.clientName, &c.notes, &c.causeNumber, &c.county, &c.court, &c.caseType,
+                           &c.marriageDate, &c.marriagePlace, &c.separationDate, &c.insurance,
+                           &c.insuranceCarrier, &c.policyNumber, &c.groupNumber};
+    for (int i = 0; i < 13; ++i) *text[i] = q.getColumn(i + 1).getString();
+    return c;
+}
+
+// Binds the case's text columns (everything after the id) starting at `first`.
+void bindCase(SQLite::Statement& q, const ClientCase& c, int first)
+{
+    const std::string text[] = {c.clientName, c.notes, c.causeNumber, c.county, c.court, c.caseType,
+                                c.marriageDate, c.marriagePlace, c.separationDate, c.insurance,
+                                c.insuranceCarrier, c.policyNumber, c.groupNumber};
+    for (int i = 0; i < 13; ++i) q.bind(first + i, i == 1 ? text[i] : trimmed(text[i]));  // notes kept as typed
+}
+
+}  // namespace
+
 std::int64_t Database::createCase(const ClientCase& c, const std::vector<NewPerson>& initialPeople)
 {
-    const std::string name = trimmed(c.clientName);
-    if (name.empty()) throw DatabaseError("Client name is required.");
-
+    // Every case field is optional: a case can be saved with whatever is known so far.
     SQLite::Transaction tx(impl_->db);
-    SQLite::Statement q(impl_->db, "INSERT INTO cases (client_name, notes) VALUES (?, ?)");
-    q.bind(1, name);
-    q.bind(2, c.notes);
+    SQLite::Statement q(impl_->db,
+        "INSERT INTO cases (client_name, notes, cause_number, county, court, case_type, marriage_date,"
+        " marriage_place, separation_date, insurance, insurance_carrier, policy_number, group_number)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    bindCase(q, c, 1);
     q.exec();
     const std::int64_t id = impl_->db.getLastInsertRowid();
 
@@ -741,13 +847,12 @@ std::int64_t Database::createCase(const ClientCase& c, const std::vector<NewPers
 
 void Database::updateCase(const ClientCase& c)
 {
-    const std::string name = trimmed(c.clientName);
-    if (name.empty()) throw DatabaseError("Client name is required.");
-
-    SQLite::Statement q(impl_->db, "UPDATE cases SET client_name = ?, notes = ? WHERE id = ?");
-    q.bind(1, name);
-    q.bind(2, c.notes);
-    q.bind(3, c.id);
+    SQLite::Statement q(impl_->db,
+        "UPDATE cases SET client_name = ?, notes = ?, cause_number = ?, county = ?, court = ?, case_type = ?,"
+        " marriage_date = ?, marriage_place = ?, separation_date = ?, insurance = ?, insurance_carrier = ?,"
+        " policy_number = ?, group_number = ? WHERE id = ?");
+    bindCase(q, c, 1);
+    q.bind(14, c.id);
     if (q.exec() == 0) throw DatabaseError("That case no longer exists.");
 }
 
@@ -768,22 +873,284 @@ void Database::deleteCase(std::int64_t caseId)
 
 std::optional<ClientCase> Database::getCase(std::int64_t caseId) const
 {
-    SQLite::Statement q(impl_->db, "SELECT id, client_name, notes FROM cases WHERE id = ?");
+    SQLite::Statement q(impl_->db, std::string("SELECT ") + kCaseColumns + " FROM cases WHERE id = ?");
     q.bind(1, caseId);
     if (!q.executeStep()) return std::nullopt;
-    return ClientCase{q.getColumn(0).getInt64(), q.getColumn(1).getString(),
-                      q.getColumn(2).getString()};
+    return readCase(q);
 }
 
 std::vector<ClientCase> Database::listCases() const
 {
-    SQLite::Statement q(impl_->db,
-        "SELECT id, client_name, notes FROM cases ORDER BY client_name COLLATE NOCASE, id");
+    SQLite::Statement q(impl_->db, std::string("SELECT ") + kCaseColumns +
+                                       " FROM cases ORDER BY client_name = '', client_name COLLATE NOCASE,"
+                                       " cause_number COLLATE NOCASE, id");
     std::vector<ClientCase> out;
-    while (q.executeStep())
-        out.push_back({q.getColumn(0).getInt64(), q.getColumn(1).getString(),
-                       q.getColumn(2).getString()});
+    while (q.executeStep()) out.push_back(readCase(q));
     return out;
+}
+
+// ---- Parties -----------------------------------------------------------------
+
+static PartyRole roleFromText(const std::string& t)
+{
+    return t == "Respondent" ? PartyRole::Respondent : PartyRole::Petitioner;
+}
+
+namespace {
+
+const char* kPartyColumns =
+    "id, case_id, name, role, is_client, address, city_state_zip, phone, dob, pob, ssn, drivers_license, car,"
+    " employer, email, name_change";
+
+CaseParty readParty(SQLite::Statement& q)
+{
+    CaseParty p;
+    p.id = q.getColumn(0).getInt64();
+    p.caseId = q.getColumn(1).getInt64();
+    p.name = q.getColumn(2).getString();
+    p.role = q.getColumn(3).getString() == "Respondent" ? PartyRole::Respondent : PartyRole::Petitioner;
+    p.ourClient = q.getColumn(4).getInt() != 0;
+    std::string* text[] = {&p.address, &p.cityStateZip, &p.phone, &p.dob, &p.pob, &p.ssn, &p.driversLicense,
+                           &p.car, &p.employer, &p.email, &p.nameChange};
+    for (int i = 0; i < 11; ++i) *text[i] = q.getColumn(i + 5).getString();
+    return p;
+}
+
+// name, role, is_client and the 11 detail columns, from `first`.
+void bindParty(SQLite::Statement& q, const CaseParty& p, int first)
+{
+    q.bind(first, trimmed(p.name));
+    q.bind(first + 1, partyRoleName(p.role));
+    q.bind(first + 2, p.ourClient ? 1 : 0);
+    const std::string text[] = {p.address, p.cityStateZip, p.phone, p.dob, p.pob, p.ssn, p.driversLicense,
+                                p.car, p.employer, p.email, p.nameChange};
+    for (int i = 0; i < 11; ++i) q.bind(first + 3 + i, trimmed(text[i]));
+}
+
+}  // namespace
+
+std::vector<CaseParty> Database::listParties(std::int64_t caseId) const
+{
+    SQLite::Statement q(impl_->db, std::string("SELECT ") + kPartyColumns +
+                                       " FROM case_parties WHERE case_id = ? ORDER BY position, id");
+    q.bind(1, caseId);
+    std::vector<CaseParty> out;
+    while (q.executeStep()) out.push_back(readParty(q));
+    return out;
+}
+
+std::int64_t Database::addParty(std::int64_t caseId, const std::string& name, PartyRole role)
+{
+    CaseParty p;
+    p.caseId = caseId;
+    p.name = name;
+    p.role = role;
+    return addParty(p);
+}
+
+std::int64_t Database::addParty(const CaseParty& p)
+{
+    if (!getCase(p.caseId)) throw DatabaseError("That case no longer exists.");
+    SQLite::Statement q(impl_->db,
+        "INSERT INTO case_parties (name, role, is_client, address, city_state_zip, phone, dob, pob, ssn,"
+        " drivers_license, car, employer, email, name_change, case_id, position)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
+        " (SELECT COALESCE(MAX(position), -1) + 1 FROM case_parties WHERE case_id = ?))");
+    bindParty(q, p, 1);
+    q.bind(15, p.caseId);
+    q.bind(16, p.caseId);
+    q.exec();
+    return impl_->db.getLastInsertRowid();
+}
+
+void Database::updateParty(const CaseParty& p)
+{
+    SQLite::Statement q(impl_->db,
+        "UPDATE case_parties SET name = ?, role = ?, is_client = ?, address = ?, city_state_zip = ?, phone = ?,"
+        " dob = ?, pob = ?, ssn = ?, drivers_license = ?, car = ?, employer = ?, email = ?, name_change = ?"
+        " WHERE id = ?");
+    bindParty(q, p, 1);
+    q.bind(15, p.id);
+    if (q.exec() == 0) throw DatabaseError("That party no longer exists.");
+}
+
+void Database::deleteParty(std::int64_t partyId)
+{
+    SQLite::Statement q(impl_->db, "DELETE FROM case_parties WHERE id = ?");
+    q.bind(1, partyId);
+    q.exec();
+}
+
+// ---- Children and other people ----------------------------------------------------
+
+namespace {
+
+CaseChild readChild(SQLite::Statement& q)
+{
+    CaseChild c;
+    c.id = q.getColumn(0).getInt64();
+    c.caseId = q.getColumn(1).getInt64();
+    std::string* text[] = {&c.name, &c.age, &c.sex, &c.dob, &c.pob, &c.school, &c.ssn};
+    for (int i = 0; i < 7; ++i) *text[i] = q.getColumn(i + 2).getString();
+    return c;
+}
+
+void bindChild(SQLite::Statement& q, const CaseChild& c)
+{
+    const std::string text[] = {c.name, c.age, c.sex, c.dob, c.pob, c.school, c.ssn};
+    for (int i = 0; i < 7; ++i) q.bind(i + 1, trimmed(text[i]));
+}
+
+CaseContact readContact(SQLite::Statement& q)
+{
+    CaseContact c;
+    c.id = q.getColumn(0).getInt64();
+    c.caseId = q.getColumn(1).getInt64();
+    std::string* text[] = {&c.role, &c.name, &c.firm, &c.barNumber, &c.address, &c.phone, &c.fax, &c.email};
+    for (int i = 0; i < 8; ++i) *text[i] = q.getColumn(i + 2).getString();
+    return c;
+}
+
+void bindContact(SQLite::Statement& q, const CaseContact& c)
+{
+    const std::string text[] = {c.role, c.name, c.firm, c.barNumber, c.address, c.phone, c.fax, c.email};
+    for (int i = 0; i < 8; ++i) q.bind(i + 1, trimmed(text[i]));
+}
+
+}  // namespace
+
+std::vector<CaseChild> Database::listChildren(std::int64_t caseId) const
+{
+    SQLite::Statement q(impl_->db,
+        "SELECT id, case_id, name, age, sex, dob, pob, school, ssn FROM case_children WHERE case_id = ?"
+        " ORDER BY position, id");
+    q.bind(1, caseId);
+    std::vector<CaseChild> out;
+    while (q.executeStep()) out.push_back(readChild(q));
+    return out;
+}
+
+std::int64_t Database::addChild(const CaseChild& c)
+{
+    if (!getCase(c.caseId)) throw DatabaseError("That case no longer exists.");
+    SQLite::Statement q(impl_->db,
+        "INSERT INTO case_children (name, age, sex, dob, pob, school, ssn, case_id, position)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM case_children WHERE case_id = ?))");
+    bindChild(q, c);
+    q.bind(8, c.caseId);
+    q.bind(9, c.caseId);
+    q.exec();
+    return impl_->db.getLastInsertRowid();
+}
+
+void Database::updateChild(const CaseChild& c)
+{
+    SQLite::Statement q(impl_->db,
+        "UPDATE case_children SET name = ?, age = ?, sex = ?, dob = ?, pob = ?, school = ?, ssn = ? WHERE id = ?");
+    bindChild(q, c);
+    q.bind(8, c.id);
+    if (q.exec() == 0) throw DatabaseError("That child no longer exists.");
+}
+
+void Database::deleteChild(std::int64_t childId)
+{
+    SQLite::Statement q(impl_->db, "DELETE FROM case_children WHERE id = ?");
+    q.bind(1, childId);
+    q.exec();
+}
+
+std::vector<CaseContact> Database::listContacts(std::int64_t caseId) const
+{
+    SQLite::Statement q(impl_->db,
+        "SELECT id, case_id, role, name, firm, bar_number, address, phone, fax, email FROM case_contacts"
+        " WHERE case_id = ? ORDER BY position, id");
+    q.bind(1, caseId);
+    std::vector<CaseContact> out;
+    while (q.executeStep()) out.push_back(readContact(q));
+    return out;
+}
+
+std::int64_t Database::addContact(const CaseContact& c)
+{
+    if (!getCase(c.caseId)) throw DatabaseError("That case no longer exists.");
+    SQLite::Statement q(impl_->db,
+        "INSERT INTO case_contacts (role, name, firm, bar_number, address, phone, fax, email, case_id, position)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM case_contacts WHERE case_id = ?))");
+    bindContact(q, c);
+    q.bind(9, c.caseId);
+    q.bind(10, c.caseId);
+    q.exec();
+    return impl_->db.getLastInsertRowid();
+}
+
+void Database::updateContact(const CaseContact& c)
+{
+    SQLite::Statement q(impl_->db,
+        "UPDATE case_contacts SET role = ?, name = ?, firm = ?, bar_number = ?, address = ?, phone = ?, fax = ?,"
+        " email = ? WHERE id = ?");
+    bindContact(q, c);
+    q.bind(9, c.id);
+    if (q.exec() == 0) throw DatabaseError("That person no longer exists.");
+}
+
+void Database::deleteContact(std::int64_t contactId)
+{
+    SQLite::Statement q(impl_->db, "DELETE FROM case_contacts WHERE id = ?");
+    q.bind(1, contactId);
+    q.exec();
+}
+
+// ---- Attorneys on a case ----------------------------------------------------------
+
+std::vector<Attorney> Database::listCaseAttorneys(std::int64_t caseId) const
+{
+    SQLite::Statement q(impl_->db,
+        "SELECT a.id, a.firm_id, a.name, a.bar_number, a.email, a.sign_off FROM case_attorneys ca"
+        " JOIN attorneys a ON a.id = ca.attorney_id JOIN firms f ON f.id = a.firm_id"
+        " WHERE ca.case_id = ? ORDER BY f.is_ours DESC, f.name COLLATE NOCASE, a.name COLLATE NOCASE, a.id");
+    q.bind(1, caseId);
+    std::vector<Attorney> out;
+    while (q.executeStep())
+        out.push_back({q.getColumn(0).getInt64(), q.getColumn(1).getInt64(), q.getColumn(2).getString(),
+                       q.getColumn(3).getString(), q.getColumn(4).getString(), q.getColumn(5).getString()});
+    return out;
+}
+
+void Database::setCaseAttorneys(std::int64_t caseId, const std::vector<std::int64_t>& attorneyIds)
+{
+    if (!getCase(caseId)) throw DatabaseError("That case no longer exists.");
+    SQLite::Transaction tx(impl_->db);
+    SQLite::Statement del(impl_->db, "DELETE FROM case_attorneys WHERE case_id = ?");
+    del.bind(1, caseId);
+    del.exec();
+    for (const auto id : attorneyIds) {
+        SQLite::Statement check(impl_->db, "SELECT COUNT(*) FROM attorneys WHERE id = ?");
+        check.bind(1, id);
+        check.executeStep();
+        if (check.getColumn(0).getInt() == 0)
+            throw DatabaseError("One of the attorneys was deleted from the directory. Choose the attorneys again.");
+        SQLite::Statement ins(impl_->db, "INSERT OR IGNORE INTO case_attorneys (case_id, attorney_id) VALUES (?, ?)");
+        ins.bind(1, caseId);
+        ins.bind(2, id);
+        ins.exec();
+    }
+    tx.commit();
+}
+
+void Database::removeCaseAttorney(std::int64_t caseId, std::int64_t attorneyId)
+{
+    SQLite::Statement q(impl_->db, "DELETE FROM case_attorneys WHERE case_id = ? AND attorney_id = ?");
+    q.bind(1, caseId);
+    q.bind(2, attorneyId);
+    q.exec();
+}
+
+std::size_t Database::caseCountForAttorney(std::int64_t attorneyId) const
+{
+    SQLite::Statement q(impl_->db, "SELECT COUNT(*) FROM case_attorneys WHERE attorney_id = ?");
+    q.bind(1, attorneyId);
+    q.executeStep();
+    return static_cast<std::size_t>(q.getColumn(0).getInt64());
 }
 
 // ---- People ---------------------------------------------------------------
@@ -1055,6 +1422,165 @@ void Database::deleteTemplate(std::int64_t id)
 {
     SQLite::Statement q(impl_->db, "DELETE FROM document_templates WHERE id = ?");
     q.bind(1, id);
+    q.exec();
+}
+
+// ---- Attorney directory -----------------------------------------------------
+
+static Firm readFirm(SQLite::Statement& q)
+{
+    return {q.getColumn(0).getInt64(), q.getColumn(1).getString(), q.getColumn(2).getString(),
+            q.getColumn(3).getString(), q.getColumn(4).getString(), q.getColumn(5).getInt() != 0};
+}
+
+static Attorney readAttorney(SQLite::Statement& q)
+{
+    return {q.getColumn(0).getInt64(), q.getColumn(1).getInt64(), q.getColumn(2).getString(),
+            q.getColumn(3).getString(), q.getColumn(4).getString(), q.getColumn(5).getString()};
+}
+
+static void requireFirm(SQLite::Database& db, std::int64_t id)
+{
+    SQLite::Statement q(db, "SELECT COUNT(*) FROM firms WHERE id = ?");
+    q.bind(1, id);
+    q.executeStep();
+    if (q.getColumn(0).getInt() == 0) throw DatabaseError("That firm no longer exists.");
+}
+
+static void checkFirm(SQLite::Database& db, const Firm& f, std::int64_t ownId)
+{
+    const std::string name = trimmedName(f.name);
+    if (name.empty()) throw DatabaseError("Type the firm's name.");
+    SQLite::Statement q(db, "SELECT COUNT(*) FROM firms WHERE name = ? COLLATE NOCASE AND id != ?");
+    q.bind(1, name);
+    q.bind(2, ownId);
+    q.executeStep();
+    if (q.getColumn(0).getInt() > 0) throw DatabaseError("There is already a firm named \"" + name + "\".");
+}
+
+static void checkAttorney(SQLite::Database& db, const Attorney& a)
+{
+    if (trimmedName(a.name).empty()) throw DatabaseError("Type the attorney's name.");
+    requireFirm(db, a.firmId);
+}
+
+std::vector<Firm> Database::listFirms() const
+{
+    SQLite::Statement q(impl_->db,
+        "SELECT id, name, phone, fax, address, is_ours FROM firms ORDER BY name COLLATE NOCASE, id");
+    std::vector<Firm> out;
+    while (q.executeStep()) out.push_back(readFirm(q));
+    return out;
+}
+
+std::int64_t Database::createFirm(const Firm& f)
+{
+    checkFirm(impl_->db, f, 0);
+    SQLite::Statement q(impl_->db, "INSERT INTO firms (name, phone, fax, address, is_ours) VALUES (?, ?, ?, ?, ?)");
+    q.bind(1, trimmedName(f.name));
+    q.bind(2, trimmedName(f.phone));
+    q.bind(3, trimmedName(f.fax));
+    q.bind(4, trimmedName(f.address));
+    q.bind(5, f.ours ? 1 : 0);
+    q.exec();
+    return impl_->db.getLastInsertRowid();
+}
+
+void Database::updateFirm(const Firm& f)
+{
+    checkFirm(impl_->db, f, f.id);
+    SQLite::Statement q(impl_->db, "UPDATE firms SET name = ?, phone = ?, fax = ?, address = ?, is_ours = ? WHERE id = ?");
+    q.bind(1, trimmedName(f.name));
+    q.bind(2, trimmedName(f.phone));
+    q.bind(3, trimmedName(f.fax));
+    q.bind(4, trimmedName(f.address));
+    q.bind(5, f.ours ? 1 : 0);
+    q.bind(6, f.id);
+    if (q.exec() == 0) throw DatabaseError("That firm no longer exists.");
+}
+
+void Database::deleteFirm(std::int64_t firmId)
+{
+    SQLite::Statement c(impl_->db, "SELECT COUNT(*) FROM attorneys WHERE firm_id = ?");
+    c.bind(1, firmId);
+    c.executeStep();
+    if (c.getColumn(0).getInt() > 0)
+        throw DatabaseError("This firm still has attorneys. Move or delete them first.");
+    SQLite::Statement q(impl_->db, "DELETE FROM firms WHERE id = ?");
+    q.bind(1, firmId);
+    q.exec();
+}
+
+std::vector<Attorney> Database::listAttorneys(std::int64_t firmId) const
+{
+    SQLite::Statement q(impl_->db,
+        "SELECT id, firm_id, name, bar_number, email, sign_off FROM attorneys WHERE firm_id = ? ORDER BY name COLLATE NOCASE, id");
+    q.bind(1, firmId);
+    std::vector<Attorney> out;
+    while (q.executeStep()) out.push_back(readAttorney(q));
+    return out;
+}
+
+std::vector<Attorney> Database::listAllAttorneys() const
+{
+    SQLite::Statement q(impl_->db,
+        "SELECT id, firm_id, name, bar_number, email, sign_off FROM attorneys ORDER BY name COLLATE NOCASE, id");
+    std::vector<Attorney> out;
+    while (q.executeStep()) out.push_back(readAttorney(q));
+    return out;
+}
+
+std::int64_t Database::createAttorney(const Attorney& a)
+{
+    checkAttorney(impl_->db, a);
+    SQLite::Statement q(impl_->db,
+        "INSERT INTO attorneys (firm_id, name, bar_number, email, sign_off) VALUES (?, ?, ?, ?, ?)");
+    q.bind(1, a.firmId);
+    q.bind(2, trimmedName(a.name));
+    q.bind(3, trimmedName(a.barNumber));
+    q.bind(4, trimmedName(a.email));
+    q.bind(5, trimmedName(a.signOff));
+    q.exec();
+    return impl_->db.getLastInsertRowid();
+}
+
+void Database::updateAttorney(const Attorney& a)
+{
+    checkAttorney(impl_->db, a);
+    SQLite::Statement q(impl_->db,
+        "UPDATE attorneys SET firm_id = ?, name = ?, bar_number = ?, email = ?, sign_off = ? WHERE id = ?");
+    q.bind(1, a.firmId);
+    q.bind(2, trimmedName(a.name));
+    q.bind(3, trimmedName(a.barNumber));
+    q.bind(4, trimmedName(a.email));
+    q.bind(5, trimmedName(a.signOff));
+    q.bind(6, a.id);
+    if (q.exec() == 0) throw DatabaseError("That attorney no longer exists.");
+}
+
+void Database::moveAttorney(std::int64_t attorneyId, std::int64_t newFirmId)
+{
+    requireFirm(impl_->db, newFirmId);
+    SQLite::Statement q(impl_->db, "UPDATE attorneys SET firm_id = ? WHERE id = ?");
+    q.bind(1, newFirmId);
+    q.bind(2, attorneyId);
+    if (q.exec() == 0) throw DatabaseError("That attorney no longer exists.");
+}
+
+std::size_t Database::moveAllAttorneys(std::int64_t fromFirmId, std::int64_t toFirmId)
+{
+    requireFirm(impl_->db, fromFirmId);
+    requireFirm(impl_->db, toFirmId);
+    SQLite::Statement q(impl_->db, "UPDATE attorneys SET firm_id = ? WHERE firm_id = ?");
+    q.bind(1, toFirmId);
+    q.bind(2, fromFirmId);
+    return static_cast<std::size_t>(q.exec());
+}
+
+void Database::deleteAttorney(std::int64_t attorneyId)
+{
+    SQLite::Statement q(impl_->db, "DELETE FROM attorneys WHERE id = ?");
+    q.bind(1, attorneyId);
     q.exec();
 }
 

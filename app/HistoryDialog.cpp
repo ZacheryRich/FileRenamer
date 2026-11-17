@@ -63,7 +63,7 @@ void HistoryDialog::reload()
     std::map<std::int64_t, QString> caseNames;
     runGuarded(this, [&] {
         batches_ = db_.listBatches(500);
-        for (const auto& c : db_.listCases()) caseNames[c.id] = qstr(c.clientName);
+        for (const auto& c : db_.listCases()) caseNames[c.id] = qstr(caseDisplayName(c));
     });
 
     table_->setRowCount(static_cast<int>(batches_.size()));

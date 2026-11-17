@@ -39,7 +39,7 @@ UpdateNamesDialog::UpdateNamesDialog(Database& db, std::int64_t caseId, QWidget*
     setWindowFlags(windowFlags() | Qt::WindowMaximizeButtonHint);
     std::optional<ClientCase> c;
     runGuarded(this, [&] { c = db_.getCase(caseId_); });
-    setWindowTitle(tr("Update File Names - %1").arg(c ? qstr(c->clientName) : QString()));
+    setWindowTitle(tr("Update File Names - %1").arg(c ? qstr(caseDisplayName(*c)) : QString()));
 
     auto* intro = new QLabel(tr(
         "Finds files and account folders that still use an account's old name (a typo since fixed, "
